@@ -4,6 +4,68 @@
 Always delegate tasks through the manager agent for orchestration.
 The manager will break work into subtasks and delegate to the right specialists.
 
+### Agent Roster
+
+**Orchestration**
+- `manager` (opus) — breaks tasks into subtasks, consults advisors, delegates to specialists, enforces retry policy
+
+**Advisors** — pre-flight, return constraints not code, read-only tools
+- `security-advisor` (opus) — auth, PII, external I/O, secrets, RBAC
+- `architecture-advisor` (opus) — new services, cross-cutting changes, schema design
+- `performance-advisor` (sonnet) — hot paths, DB queries, API latency
+- `cost-advisor` (haiku) — IaC changes, scaling config, new infra resources
+- `dependency-advisor` (haiku) — new libraries, services, external dependencies
+
+**Specialists** — write code, return output contracts, do NOT commit
+- `frontend-specialist` (sonnet) — React, TypeScript, HTML, CSS, client-side
+- `backend-specialist` (sonnet) — APIs, server logic, auth, business rules
+- `db-specialist` (sonnet) — schema, migrations, queries, data modelling
+- `iac-specialist` (sonnet) — Nix flakes, Helm, Terraform, env config
+- `devops-specialist` (sonnet) — CI/CD pipelines, deployment automation, monitoring
+- `app-specialist` (sonnet) — games, desktop apps, CLI tools, scripts
+- `finance-specialist` (sonnet) — billing, payments, invoicing, pricing
+- `network-specialist` (sonnet) — ingress, DNS, TLS, service mesh, load balancing
+- `data-specialist` (sonnet) — ETL, pipelines, analytics schema, reporting
+
+**QA** — called during planning phase
+- `qa-specialist` (sonnet) — test strategy, coverage standards, pass conditions
+
+**Post-agents** — run after specialists complete
+- `tester` (sonnet) — pre-checks, tests, code review → PASS/FAIL verdict
+- `committer` (haiku) — atomic git commit after PASS (only agent that commits)
+- `documenter` (haiku) — READMEs, API docs, changelogs (not vault notes)
+- `learner` (sonnet) — Zettelkasten notes, vault pruning (not project docs)
+
+### Execution flow
+```
+manager
+  → Phase 0: Read codebase
+  → Phase 1: Search vault for prior knowledge
+  → Phase 2: Fire advisors (parallel) → collect constraints
+  → Phase 3: Plan (with advisor constraints + qa-specialist if needed)
+  → Phase 4: Delegate to specialists (with constraints baked in)
+  → Phase 5: tester → committer → documenter → learner
+```
+
+### Retry policy
+- Max 3 retries per specialist per subtask
+- After 3 failures, escalate to the user with: what was attempted, what failed, root cause guess
+
+### Specialist output contract
+Every specialist returns:
+```
+STATUS: done | blocked
+FILES_CHANGED: [list]
+NOTES: [caveats, decisions]
+BLOCKED_REASON: [if blocked]
+```
+
+### Commit discipline
+- Only the `committer` agent creates commits
+- All other agents must NOT run git commit
+- Stage files by name — never `git add -A` or `git add .`
+- Never amend, never skip hooks, never force push
+
 ---
 
 ## Obsidian Vault as Persistent Memory
