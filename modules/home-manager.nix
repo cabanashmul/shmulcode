@@ -1,3 +1,3 @@
 { ... }: {
-  flake.homeManagerModules.default = import ../claude;
+  flake.homeManagerModules.default = import ../default.nix;
 }
