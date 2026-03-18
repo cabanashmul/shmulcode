@@ -236,7 +236,7 @@
       config = mkMerge [
         # Default global instructions
         {
-          programs.claude.globalInstructions = ../CLAUDE.md;
+          programs.claude.globalInstructions = builtins.readFile ../CLAUDE.md;
         }
 
         # Claude Code core
