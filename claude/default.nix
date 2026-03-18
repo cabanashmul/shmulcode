@@ -1,43 +1,9 @@
-{ config, lib, pkgs, inputs, ... }:
+{ config, lib, pkgs, ... }:
 
 with lib;
 
 let
-  cfg        = config.programs.claude;
-  obsidianCfg = config.programs.claude.mcp.obsidian;
-
-  # Wrapper script that reads the API key at runtime from a sops secret path.
-  # Exits immediately if Obsidian is not reachable so claude doesn't hang.
-  obsidianMcpWrapper = pkgs.writeShellScript "obsidian-mcp-wrapper" ''
-    # Parse host/port from OBSIDIAN_HOST to do a quick reachability check
-    HOST="${obsidianCfg.host}"
-    # Strip protocol
-    HOSTPORT="''${HOST#*://}"
-    ADDR="''${HOSTPORT%%/*}"
-    IP="''${ADDR%:*}"
-    PORT="''${ADDR##*:}"
-
-    if ! ${pkgs.curl}/bin/curl -sk --max-time 2 "$HOST" > /dev/null 2>&1; then
-      echo "obsidian-mcp-wrapper: Obsidian not reachable at $HOST, exiting." >&2
-      exit 1
-    fi
-
-    export OBSIDIAN_API_KEY="$(cat "${obsidianCfg.apiKey}")"
-    export OBSIDIAN_HOST="${obsidianCfg.host}"
-    exec ${pkgs.nodejs}/bin/npx -y mcp-obsidian "${obsidianCfg.vaultPath}"
-  '';
-
-  # Build the mcpServers attrset conditionally
-  mcpServers = optionalAttrs obsidianCfg.enable {
-    obsidian = {
-      command = builtins.toString obsidianMcpWrapper;
-      args    = [];
-    };
-  };
-
-  claudeConfig = {
-    inherit mcpServers;
-  };
+  cfg = config.programs.claude;
 
   # ── Auto-discovery ──────────────────────────────────────────────────
 
@@ -87,11 +53,17 @@ let
     // cfg.settings.extraSettings
   );
 
-in {
-  imports = [
-    inputs.shmulistan.homeManagerModules.default
-  ];
+  # ── MCP config assembly ────────────────────────────────────────────
 
+  mcpConfig = {
+    mcpServers = mapAttrs (_: srv: {
+      inherit (srv) command args;
+    } // optionalAttrs (srv.env != {}) {
+      inherit (srv) env;
+    }) cfg.mcp.servers;
+  };
+
+in {
   # ── Claude Code ──────────────────────────────────────────────────────
 
   options.programs.claude = {
@@ -134,13 +106,15 @@ in {
 
       skipDangerousModePermissionPrompt = mkOption {
         type    = types.bool;
-        default = false;
+        default = true;
         description = "Whether to skip the dangerous mode permission prompt.";
       };
 
       env = mkOption {
         type    = types.attrsOf types.str;
-        default = {};
+        default = {
+          CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS = "1";
+        };
         description = "Environment variables to set for Claude Code.";
       };
 
@@ -148,6 +122,53 @@ in {
         type    = types.attrs;
         default = {};
         description = "Arbitrary extra keys merged into settings.json.";
+      };
+    };
+
+    # ── MCP Servers ──────────────────────────────────────────────────
+
+    mcp.servers = mkOption {
+      type = types.attrsOf (types.submodule {
+        options = {
+          command = mkOption {
+            type = types.str;
+            description = "Command to run the MCP server.";
+          };
+          args = mkOption {
+            type    = types.listOf types.str;
+            default = [];
+            description = "Arguments to pass to the MCP server command.";
+          };
+          env = mkOption {
+            type    = types.attrsOf types.str;
+            default = {};
+            description = "Environment variables for the MCP server.";
+          };
+        };
+      });
+      default = {};
+      description = "MCP servers to configure in ~/.claude.json";
+    };
+
+    # ── Vault ────────────────────────────────────────────────────────
+
+    vault = {
+      enable = mkOption {
+        type    = types.bool;
+        default = true;
+        description = "Whether to enable the shmulistan knowledge vault.";
+      };
+
+      path = mkOption {
+        type        = types.str;
+        default     = "${config.home.homeDirectory}/shmulistan";
+        description = "Path to the shmulistan vault.";
+      };
+
+      repoUrl = mkOption {
+        type        = types.str;
+        default     = "https://github.com/shmul95/shmulistan.git";
+        description = "Git URL to clone the vault from if not present.";
       };
     };
 
@@ -209,53 +230,12 @@ in {
     };
   };
 
-  # ── Obsidian MCP ─────────────────────────────────────────────────────
-
-  options.programs.claude.mcp.obsidian = {
-    enable = mkEnableOption "Obsidian MCP server for Claude Code memory";
-
-    package = mkOption {
-      type        = types.package;
-      default     = pkgs.obsidian;
-      description = "The Obsidian package to install.";
-    };
-
-    apiKey = mkOption {
-      type    = types.str;
-      default = "";
-      description = ''
-        Obsidian Local REST API key.
-        Either the API key directly, or a path to a file containing it
-        (e.g. config.sops.secrets.obsidian_api_key.path).
-      '';
-    };
-
-    host = mkOption {
-      type    = types.str;
-      default = "https://127.0.0.1:27124";
-      description = "Obsidian Local REST API host.";
-    };
-
-    vaultPath = mkOption {
-      type    = types.str;
-      default = "$HOME/Documents/Obsidian";
-      description = "Path to your Obsidian vault.";
-    };
-  };
-
   # ── Config ───────────────────────────────────────────────────────────
 
   config = mkMerge [
-    # Claude Code config values
+    # Default global instructions
     {
-      programs.claude = {
-        globalInstructions = ./CLAUDE.md;
-        settings = {
-          effortLevel = "high";
-          skipDangerousModePermissionPrompt = true;
-          env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS = "1";
-        };
-      };
+      programs.claude.globalInstructions = ./CLAUDE.md;
     }
 
     # Claude Code core
@@ -263,8 +243,8 @@ in {
       home.packages = [ cfg.package ];
 
       # ── claude.json (MCP config) ───────────────────────────────────
-      home.activation.claudeJson = mkIf (mcpServers != {}) (lib.hm.dag.entryAfter ["writeBoundary"] ''
-        _src=${pkgs.writeText "claude.json" (builtins.toJSON claudeConfig)}
+      home.activation.claudeJson = mkIf (cfg.mcp.servers != {}) (lib.hm.dag.entryAfter ["writeBoundary"] ''
+        _src=${pkgs.writeText "claude.json" (builtins.toJSON mcpConfig)}
         _dst="$HOME/.claude.json"
         if [ -L "$_dst" ]; then
           $DRY_RUN_CMD rm "$_dst"
@@ -365,20 +345,13 @@ in {
       '';
     })
 
-    # Obsidian MCP
-    (mkIf obsidianCfg.enable {
-      home.packages = [ obsidianCfg.package ];
-      assertions = [
-        {
-          assertion = obsidianCfg.apiKey != "";
-          message   = "programs.claude.mcp.obsidian.apiKey must be set when obsidian MCP is enabled.";
-        }
-      ];
-    })
-
-    # Shmulistan vault
-    (mkIf cfg.enable {
-      programs.shmulistan.enable = true;
+    # Shmulistan vault clone activation
+    (mkIf cfg.vault.enable {
+      home.activation.shmulistan-clone = lib.hm.dag.entryAfter ["writeBoundary"] ''
+        if [ ! -d "${cfg.vault.path}" ]; then
+          $DRY_RUN_CMD ${pkgs.git}/bin/git clone "${cfg.vault.repoUrl}" "${cfg.vault.path}"
+        fi
+      '';
     })
   ];
 }

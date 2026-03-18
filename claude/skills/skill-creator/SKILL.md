@@ -14,7 +14,7 @@ Claude Code projects.
 |--------|---------------------------|-------------------------------|
 | Trigger | Auto-triggered by context | Explicit `/command` invocation |
 | Purpose | Background knowledge, domain expertise | Interactive workflows, multi-step tasks |
-| Example | Obsidian markdown syntax reference | `/daily-review` workflow |
+| Example | Nix flake-parts patterns reference | `/daily-review` workflow |
 | Format | `SKILL.md` in named folder | `command-name.md` file |
 
 ## Core Principles

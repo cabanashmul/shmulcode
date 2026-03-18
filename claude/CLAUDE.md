@@ -1,5 +1,11 @@
 # Claude Global Instructions
 
+## Task Orchestration
+Always delegate tasks through the manager agent for orchestration.
+The manager will break work into subtasks and delegate to the right specialists.
+
+---
+
 ## Obsidian Vault as Persistent Memory
 
 You have access to an Obsidian vault at `/home/shmul95/shmulistan`.
