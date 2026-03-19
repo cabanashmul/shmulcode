@@ -348,6 +348,8 @@
 
         # Shmulistan vault clone activation
         (mkIf cfg.vault.enable {
+          home.packages = [ pkgs.obsidian ];
+
           home.activation.shmulistan-clone = lib.hm.dag.entryAfter ["writeBoundary"] ''
             if [ ! -d "${cfg.vault.path}" ]; then
               $DRY_RUN_CMD ${pkgs.git}/bin/git clone "${cfg.vault.repoUrl}" "${cfg.vault.path}"
