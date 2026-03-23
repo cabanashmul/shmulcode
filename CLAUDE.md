@@ -1,7 +1,16 @@
 # Claude Global Instructions
 
 ## Task Orchestration
-Always delegate tasks through the manager agent for orchestration.
+
+### Direct commands (bypass manager)
+These short commands invoke a single post-agent directly — no manager needed:
+- **"commit"** → `Agent(subagent_type: "committer")` — commit current changes
+- **"test"** → `Agent(subagent_type: "tester")` — run tests and code review
+- **"document"** → `Agent(subagent_type: "documenter")` — update docs for recent changes
+- **"learn"** → `Agent(subagent_type: "learner")` — write vault notes from recent work
+
+### Everything else → manager
+For all other tasks, delegate through the manager agent for orchestration.
 The manager will break work into subtasks and delegate to the right specialists.
 
 ### Agent Roster
