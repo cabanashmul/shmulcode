@@ -258,5 +258,6 @@ qrouter <command> [args]
 
 ## See Also
 
-- `/home/shmulcode/CLAUDE.md`: Overall system architecture
-- `/home/shmulcode/agents/`: Agent definitions and model assignments
+- [../CLAUDE.md](../CLAUDE.md): Overall system architecture and execution protocol
+- [../agents/](../agents/): Agent definitions and model assignments
+- [../README.md](../README.md): Main repository documentation
