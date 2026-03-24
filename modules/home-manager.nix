@@ -43,15 +43,38 @@
 
       # ── settings.json assembly ──────────────────────────────────────────
 
+      qrouterHooks = optionalAttrs cfg.qrouter.enable {
+        hooks = {
+          PreToolUse = [{
+            matcher = "Agent";
+            hooks = [{
+              type    = "command";
+              command = "PYTHONPATH=${cfg.qrouter.repoPath} python3 -m qrouter.hooks.pre_tool_use";
+              timeout = 5000;
+            }];
+          }];
+          PostToolUse = [{
+            matcher = "Agent";
+            hooks = [{
+              type    = "command";
+              command = "PYTHONPATH=${cfg.qrouter.repoPath} python3 -m qrouter.hooks.post_tool_use";
+              timeout = 10000;
+            }];
+          }];
+        };
+      };
+
       settingsJson = builtins.toJSON (
-        { effortLevel = cfg.settings.effortLevel; }
-        // optionalAttrs cfg.settings.skipDangerousModePermissionPrompt {
-          skipDangerousModePermissionPrompt = true;
-        }
-        // optionalAttrs (cfg.settings.env != {}) {
-          env = cfg.settings.env;
-        }
-        // cfg.settings.extraSettings
+        recursiveUpdate
+          ({ effortLevel = cfg.settings.effortLevel; }
+           // optionalAttrs cfg.settings.skipDangerousModePermissionPrompt {
+             skipDangerousModePermissionPrompt = true;
+           }
+           // optionalAttrs (cfg.settings.env != {}) {
+             env = cfg.settings.env;
+           }
+           // cfg.settings.extraSettings)
+          qrouterHooks
       );
 
       # ── MCP config assembly ────────────────────────────────────────────
@@ -229,6 +252,28 @@
             '';
           };
         };
+
+        # ── Q-learning model router ────────────────────────────────────────
+
+        qrouter = {
+          enable = mkOption {
+            type    = types.bool;
+            default = false;
+            description = ''
+              Whether to register qrouter PreToolUse/PostToolUse hooks in settings.json.
+              Requires the qrouter/ Python package to be present at repoPath.
+            '';
+          };
+
+          repoPath = mkOption {
+            type        = types.str;
+            default     = "${config.home.homeDirectory}/Repositories/shmulcode";
+            description = ''
+              Absolute path to the shmulcode repository root where qrouter/ lives.
+              Used as PYTHONPATH when invoking the hook modules.
+            '';
+          };
+        };
       };
 
       # ── Config ───────────────────────────────────────────────────────────
@@ -344,6 +389,11 @@
               unset _claude_comp
             fi
           '';
+        })
+
+        # qrouter hooks: python3 runtime
+        (mkIf cfg.qrouter.enable {
+          home.packages = [ pkgs.python3 ];
         })
 
         # Shmulistan vault clone activation
