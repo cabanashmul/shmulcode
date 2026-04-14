@@ -64,6 +64,7 @@ Edit your `flake.nix` or Home Manager configuration:
               agents.enable = true;
               skills.enable = true;
               commands.enable = true;
+              agents.enabled."finance-specialist" = false;
               vault.enable = true;
               qrouter.enable = true;
               qrouter.repoPath = "${shmulcode}";
@@ -302,6 +303,7 @@ programs.claude = {
 programs.claude = {
   agents = {
     enable = true;                        # Auto-discover from agents/
+    enabled."finance-specialist" = false; # Disable one discovered agent
     extraAgents = {
       "my-agent.md" = "...";              # Define inline
     };
@@ -309,6 +311,7 @@ programs.claude = {
 
   skills = {
     enable = true;                        # Auto-discover from skills/
+    enabled."git-worktrees" = false;      # Disable one discovered skill
     extraSkills = {
       "my-skill" = "...";                 # Define inline
     };
@@ -316,6 +319,7 @@ programs.claude = {
 
   commands = {
     enable = true;                        # Auto-discover from commands/
+    # enabled."existing-command" = false; # Disable one discovered command
     extraCommands = {
       "my-command.md" = "...";            # Define inline
     };
@@ -355,6 +359,9 @@ programs.claude.vault = {
   repoUrl = "https://github.com/shmul95/shmulistan.git";
 };
 ```
+
+Set `programs.claude.vault.enable = false;` to prevent `shmulcode` from cloning the vault.
+This only affects the vault integration managed by `shmulcode` itself.
 
 ## File Organization
 

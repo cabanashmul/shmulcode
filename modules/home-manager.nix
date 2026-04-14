@@ -41,6 +41,37 @@
              ) entries)
         else {};
 
+      stripMdSuffix = name:
+        if hasSuffix ".md" name
+        then removeSuffix ".md" name
+        else name;
+
+      discoveredAgentNames = map stripMdSuffix (attrNames discoveredAgents);
+      discoveredSkillNames = attrNames discoveredSkills;
+      discoveredCommandNames = map stripMdSuffix (attrNames discoveredCommands);
+
+      validateEnabledKeys = category: validNames: enabledMap:
+        let
+          invalid = filter (name: !(elem name validNames)) (attrNames enabledMap);
+          validList = concatStringsSep ", " validNames;
+          invalidList = concatStringsSep ", " invalid;
+        in
+          if invalid == [] then
+            true
+          else
+            throw "programs.claude.${category}.enabled contains unknown ${category}: ${invalidList}. Valid names: ${validList}";
+
+      _validateAgentKeys =
+        validateEnabledKeys "agents" discoveredAgentNames cfg.agents.enabled;
+      _validateSkillKeys =
+        validateEnabledKeys "skills" discoveredSkillNames cfg.skills.enabled;
+      _validateCommandKeys =
+        validateEnabledKeys "commands" discoveredCommandNames cfg.commands.enabled;
+
+      agentEnabled = name: (cfg.agents.enabled.${name} or true);
+      skillEnabled = name: (cfg.skills.enabled.${name} or true);
+      commandEnabled = name: (cfg.commands.enabled.${name} or true);
+
       # ── settings.json assembly ──────────────────────────────────────────
 
       qrouterHooks = optionalAttrs cfg.qrouter.enable {
@@ -205,6 +236,16 @@
             description = "Whether to deploy discovered agents from agents/.";
           };
 
+          enabled = mkOption {
+            type    = types.attrsOf types.bool;
+            default = {};
+            example = { "finance-specialist" = false; };
+            description = ''
+              Per-agent enable overrides for discovered agents.
+              Discovered agents are enabled by default unless explicitly set to false.
+            '';
+          };
+
           extraAgents = mkOption {
             type    = types.attrsOf types.str;
             default = {};
@@ -224,6 +265,16 @@
             description = "Whether to deploy discovered skills from skills/.";
           };
 
+          enabled = mkOption {
+            type    = types.attrsOf types.bool;
+            default = {};
+            example = { "git-worktrees" = false; };
+            description = ''
+              Per-skill enable overrides for discovered skills.
+              Discovered skills are enabled by default unless explicitly set to false.
+            '';
+          };
+
           extraSkills = mkOption {
             type    = types.attrsOf types.str;
             default = {};
@@ -241,6 +292,16 @@
             type    = types.bool;
             default = true;
             description = "Whether to deploy discovered commands from commands/.";
+          };
+
+          enabled = mkOption {
+            type    = types.attrsOf types.bool;
+            default = {};
+            example = { "commit" = false; };
+            description = ''
+              Per-command enable overrides for discovered commands.
+              Discovered commands are enabled by default unless explicitly set to false.
+            '';
           };
 
           extraCommands = mkOption {
@@ -279,6 +340,23 @@
       # ── Config ───────────────────────────────────────────────────────────
 
       config = mkMerge [
+        {
+          assertions = [
+            {
+              assertion = _validateAgentKeys;
+              message = "programs.claude.agents.enabled contains unknown agent names.";
+            }
+            {
+              assertion = _validateSkillKeys;
+              message = "programs.claude.skills.enabled contains unknown skill names.";
+            }
+            {
+              assertion = _validateCommandKeys;
+              message = "programs.claude.commands.enabled contains unknown command names.";
+            }
+          ];
+        }
+
         # Default global instructions
         {
           programs.claude.globalInstructions = builtins.readFile ../CLAUDE.md;
@@ -324,10 +402,11 @@
             # Discovered agents from ../agents/
             (mkIf cfg.agents.enable
               (mapAttrs' (name: _:
-                nameValuePair ".claude/agents/${name}" {
+                let canonicalName = stripMdSuffix name;
+                in nameValuePair ".claude/agents/${name}" {
                   source = ../agents/${name};
                 }
-              ) discoveredAgents))
+              ) (filterAttrs (name: _: agentEnabled (stripMdSuffix name)) discoveredAgents)))
 
             # Inline extra agents
             (mapAttrs' (name: content:
@@ -342,7 +421,7 @@
                 nameValuePair ".claude/skills/${name}/SKILL.md" {
                   source = ../skills/${name}/SKILL.md;
                 }
-              ) discoveredSkills))
+              ) (filterAttrs (name: _: skillEnabled name) discoveredSkills)))
 
             # Inline extra skills
             (mapAttrs' (name: content:
@@ -357,7 +436,7 @@
                 nameValuePair ".claude/commands/${name}" {
                   source = ../commands/${name};
                 }
-              ) discoveredCommands))
+              ) (filterAttrs (name: _: commandEnabled (stripMdSuffix name)) discoveredCommands)))
 
             # Inline extra commands
             (mapAttrs' (name: content:
