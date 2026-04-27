@@ -1,4 +1,4 @@
-{ ... }: {
+{ inputs, ... }: {
   flake.homeManagerModules.default = { config, lib, pkgs, ... }:
 
     with lib;
@@ -205,6 +205,16 @@
           description = "MCP servers to configure in ~/.claude.json";
         };
 
+        # ── Jira MCP integration ─────────────────────────────────────────────
+        mcp.jira = {
+          enable = mkEnableOption "Jira MCP server (ListMyIssues, GetIssue tools)";
+          envFile = mkOption {
+            type = types.str;
+            default = "${config.home.homeDirectory}/.config/jira-mcp/.env";
+            description = "Path to dotenv file containing JIRA_BASE_URL, JIRA_EMAIL, JIRA_API_TOKEN.";
+          };
+        };
+
         # ── Vault ────────────────────────────────────────────────────────
 
         vault = {
@@ -361,6 +371,15 @@
         {
           programs.claude.globalInstructions = builtins.readFile ../CLAUDE.md;
         }
+
+        # Jira MCP server injection (lazy — only built when enabled)
+        (mkIf cfg.mcp.jira.enable {
+          programs.claude.mcp.servers.jira = {
+            command = "${inputs.jira-mcp.packages.${pkgs.system}.default}/bin/jira-mcp";
+            args = [];
+            env = { JIRA_MCP_ENV_FILE = cfg.mcp.jira.envFile; };
+          };
+        })
 
         # Claude Code core
         (mkIf cfg.enable {
