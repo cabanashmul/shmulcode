@@ -10,13 +10,16 @@
       },
       "locked": {
         "lastModified": 1777398636,
-        "narHash": "sha256-QVn4zxoFjDP20roiEGvINAtHsX4N1sz8HUwPmamKINM=",
-        "path": "/home/shmul95/Repositories/claude-routine",
-        "type": "path"
+        "narHash": "sha256-eqj6yFnlLF4cfPb1j2+NIuiO9aCvi8WESjQVbKq0/PA=",
+        "ref": "refs/heads/main",
+        "rev": "770270c55ca8bed63075302e27731c75aec1598e",
+        "revCount": 1,
+        "type": "git",
+        "url": "ssh://git@github.com/shmul95/claude-routine"
       },
       "original": {
-        "path": "/home/shmul95/Repositories/claude-routine",
-        "type": "path"
+        "type": "git",
+        "url": "ssh://git@github.com/shmul95/claude-routine"
       }
     },
     "flake-parts": {

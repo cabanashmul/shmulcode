@@ -5,7 +5,7 @@
     import-tree.url = "github:vic/import-tree";
     jira-mcp.url = "git+ssh://git@github.com/shmul95/jira-mcp";
     jira-mcp.inputs.nixpkgs.follows = "nixpkgs";
-    claude-routine.url = "path:/home/shmul95/Repositories/claude-routine";
+    claude-routine.url = "git+ssh://git@github.com/shmul95/claude-routine";
     claude-routine.inputs.nixpkgs.follows = "nixpkgs";
   };
 
