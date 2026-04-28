@@ -119,6 +119,12 @@
       };
 
     in {
+      # ── Imported sibling modules ────────────────────────────────────────
+      # claude-routine adds programs.claude.routines.* options (e.g.
+      # d4aJiraTicket morning routine). Sandboxed systemd-user units only
+      # materialise when the routine is enabled.
+      imports = [ inputs.claude-routine.homeManagerModules.default ];
+
       # ── Claude Code ──────────────────────────────────────────────────────
 
       options.programs.claude = {
