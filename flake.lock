@@ -75,14 +75,17 @@
         ]
       },
       "locked": {
-        "lastModified": 1777318419,
-        "narHash": "sha256-e2oYfM7Lcjyz7glCVHP0xNVCUMimqlpRCvvYRahIxB8=",
-        "path": "/home/shmul95/Repositories/jira",
-        "type": "path"
+        "lastModified": 1777384189,
+        "narHash": "sha256-JIITAWylIp0EZgKEiF/+TIzo1gd+EvEqITo445XpI1s=",
+        "ref": "refs/heads/main",
+        "rev": "dd22b6d050100e3ab8e36ed5b4a0e1ea996dbddb",
+        "revCount": 7,
+        "type": "git",
+        "url": "ssh://git@github.com/shmul95/jira-mcp"
       },
       "original": {
-        "path": "/home/shmul95/Repositories/jira",
-        "type": "path"
+        "type": "git",
+        "url": "ssh://git@github.com/shmul95/jira-mcp"
       }
     },
     "nixpkgs": {

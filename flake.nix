@@ -3,7 +3,7 @@
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-parts.url = "github:hercules-ci/flake-parts";
     import-tree.url = "github:vic/import-tree";
-    jira-mcp.url = "path:/home/shmul95/Repositories/jira";
+    jira-mcp.url = "git+ssh://git@github.com/shmul95/jira-mcp";
     jira-mcp.inputs.nixpkgs.follows = "nixpkgs";
   };
 
