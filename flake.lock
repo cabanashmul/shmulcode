@@ -9,11 +9,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1777473961,
-        "narHash": "sha256-0c0fjGWwvok9sEEmNxSixEWwDe6N2Tv5t6hXr1Hh6Ps=",
+        "lastModified": 1777476657,
+        "narHash": "sha256-lRIV+n2QAx2SeL5jN+BXz+ibGIqUHh4G4KroVMLVgzo=",
         "ref": "refs/heads/main",
-        "rev": "6143dcbd8d5025044ecd6b3ac6fd310d9a3fbcf3",
-        "revCount": 12,
+        "rev": "0a579b7469174ab7fa7f3798738841b6aaaba62e",
+        "revCount": 13,
         "type": "git",
         "url": "ssh://git@github.com/shmul95/claude-routine"
       },
