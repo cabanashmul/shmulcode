@@ -33,6 +33,13 @@
         description = "hypothetical fourth provider (data-only proof)";
       });
 
+      # Mirrors packages.default with stub launchers, so the layout check is
+      # cheap and offline while still exercising the exact symlinkJoin shape.
+      stubBundle = pkgs.symlinkJoin {
+        name = "shmulcode";
+        paths = builtins.attrValues stubLaunchers;
+      };
+
       name = "testcode";
       otherName = "othercode";
 
@@ -125,6 +132,26 @@
           # the invariant: data-only means identical after replacing the name.
           cmp -s "$work/a" "$work/b" || { diff -u "$work/a" "$work/b" >&2 || true; fail "INST-04 scripts differ beyond interpolated values"; }
 
+          touch "$OUT"
+        '';
+
+        # DIST-03: the default-bundle layout is exactly one bin per instance and
+        # never claude. Uses stubBundle, never config.packages.default, so this
+        # check does not pull claude-code into its build closure.
+        bundle-layout = pkgs.runCommand "bundle-layout" {
+          nativeBuildInputs = [ pkgs.coreutils ];
+        } ''
+          set -euo pipefail
+          OUT=$out
+          B=${stubBundle}
+          names="${lib.concatStringsSep " " (builtins.attrNames instances)}"
+          for n in $names; do
+            test -e "$B/bin/$n" || { echo "FAIL: bundle missing bin/$n" >&2; exit 1; }
+          done
+          count=$(ls "$B/bin" | wc -l)
+          [ "$count" -eq ${toString (builtins.length (builtins.attrNames instances))} ] \
+            || { echo "FAIL: bundle bin count $count" >&2; exit 1; }
+          [ ! -e "$B/bin/claude" ] || { echo "FAIL: bundle ships claude" >&2; exit 1; }
           touch "$OUT"
         '';
 
