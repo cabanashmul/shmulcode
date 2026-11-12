@@ -21,51 +21,22 @@
 }:
 let
   lib = pkgs.lib;
+  resolver = import ./resolve-env-file.nix { inherit lib; };
+  requiredLabels = resolver.requiredLabels requiredVars;
   commandExe = lib.getExe claudePackage;          # absolute store path (CORE-02)
-  baked = if envFile == null then "" else envFile;
-
-  requiredNames = map
-    (g: if builtins.isList g then lib.concatStringsSep "/" g else g)
-    requiredVars;
-
-  groupCheck = g:
-    if builtins.isList g then
-      let
-        cond = lib.concatMapStringsSep " && " (v: "[ -z \"\${${v}:-}\" ]") g;
-        label = lib.concatStringsSep "/" g;
-      in "if ${cond}; then missing+=(\"${label}\"); fi"
-    else
-      "if [ -z \"\${${g}:-}\" ]; then missing+=(\"${g}\"); fi";
 
   extraEnvLines = lib.concatStringsSep "\n"
     (lib.mapAttrsToList
       (k: v: "export ${lib.escapeShellArg k}=${lib.escapeShellArg v}")
       extraEnv);
 
-  resolution = if baked == "" then ''
-    if [ -n "''${SHMULCODE_ENV_FILE:-}" ]; then
-      env_file="$SHMULCODE_ENV_FILE"; origin="SHMULCODE_ENV_FILE override"
-    elif [ -n "''${XDG_CONFIG_HOME:-}" ]; then
-      env_file="''${XDG_CONFIG_HOME}/${name}/env"; origin="default path"
-    elif [ -n "''${HOME:-}" ]; then
-      env_file="$HOME/.config/${name}/env"; origin="default path"
-    else
-      echo "${name}: neither XDG_CONFIG_HOME nor HOME is set; set SHMULCODE_ENV_FILE" >&2
-      exit 78
-    fi
-  '' else ''
-    if [ -n "''${SHMULCODE_ENV_FILE:-}" ]; then
-      env_file="$SHMULCODE_ENV_FILE"; origin="SHMULCODE_ENV_FILE override"
-    else
-      # CR-02: baked paths may reference runtime variables (e.g.
-      # ''${XDG_RUNTIME_DIR}/agenix/x.env). Expand under set +u so an unset
-      # variable degrades to an empty segment and the normal missing-file
-      # path reports it at exit 78 instead of nounset aborting at exit 1.
-      set +u
-      env_file="${baked}"; origin="baked path"
-      set -u
-    fi
-  '';
+  resolution = resolver.mkResolution {
+    # Bare tokens: the template supplies the surrounding double quotes.
+    # Passing "\"${name}\"" here renders `echo ""name": …` → SC2140 build failure.
+    nameExpr = name;
+    errorLabel = name;
+    baked = if envFile == null then null else envFile;
+  };
 in
 assert lib.assertMsg (envFile == null || (builtins.isString envFile && envFile != ""))
   "mkLauncher: envFile must be null or a non-empty path string (an empty string would silently fall back to the XDG/HOME path)";
@@ -80,7 +51,7 @@ pkgs.writeShellApplication {
     # ---- 2. existence / readability (never fall back from a baked path) ----
     if [ ! -f "$env_file" ]; then
       echo "${name}: environment file not found ($origin): $env_file" >&2
-      echo "${name}: expected variables: ${lib.concatStringsSep " " requiredNames}" >&2
+      echo "${name}: expected variables: ${lib.concatStringsSep " " requiredLabels}" >&2
       echo "${name}: run 'shmulcode init ${name}' to create it" >&2
       exit 78
     fi
@@ -93,6 +64,11 @@ pkgs.writeShellApplication {
     mode="$(stat -L -c '%a' "$env_file" 2>/dev/null || true)"
     if [ -n "$mode" ] && (( (8#$mode & 8#077) != 0 )); then
       echo "${name}: warning: $env_file is group/world-accessible (mode $mode); chmod 600" >&2
+    fi
+
+    # ---- 3b. SHMULCODE_DEBUG trace (paths and modes only, never values) ----
+    if [ -n "''${SHMULCODE_DEBUG:-}" ]; then
+      echo "${name}: debug: resolved ($origin): $env_file (mode ''${mode:-unknown})" >&2
     fi
 
     # ---- 4. hygiene: drop ambient provider vars (compgen is absent in nixpkgs bash) ----
@@ -134,7 +110,7 @@ pkgs.writeShellApplication {
 
     # ---- 8. validate required variables (names only, never values) ----
     missing=()
-    ${lib.concatMapStringsSep "\n" groupCheck requiredVars}
+    ${resolver.mkRequiredChecks requiredVars}
     if [ ''${#missing[@]} -ne 0 ]; then
       echo "${name}: missing required variables: ''${missing[*]}" >&2
       echo "${name}: define them in $env_file" >&2
