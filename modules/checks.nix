@@ -20,6 +20,26 @@
 
       mk = args: mkLauncher ({ inherit pkgs; claudePackage = stubClaude; } // args);
 
+      # Stub-backed launchers for the real instance data: cheap, offline, and
+      # never the real claude-code closure.
+      stubLaunchers = lib.mapAttrs (_: data: mk data) instances;
+
+      # A hypothetical fourth provider defined purely as data. It reuses the
+      # mimocode entry and overrides only what a new provider would change, so
+      # any script difference beyond the name means the builder is not
+      # data-driven (INST-04).
+      fourthLauncher = mk (instances.mimocode // {
+        name = "datacode";
+        description = "hypothetical fourth provider (data-only proof)";
+      });
+
+      # Mirrors packages.default with stub launchers, so the layout check is
+      # cheap and offline while still exercising the exact symlinkJoin shape.
+      stubBundle = pkgs.symlinkJoin {
+        name = "shmulcode";
+        paths = builtins.attrValues stubLaunchers;
+      };
+
       name = "testcode";
       otherName = "othercode";
 
@@ -65,6 +85,97 @@
             assert builtins.all (n: config.apps.${n}.program == lib.getExe config.packages.${n}) names;
             pkgs.writeText "packages-surface-ok" "ok"
           );
+
+        # INST-01..03: each built-in instance renders a real launcher through
+        # the same builder and carries the shared required-var contract.
+        # INST-04: a fourth data-only instance is identical to mimocode after
+        # name normalisation, with controls so the assertion cannot be vacuous.
+        instance-surface = pkgs.runCommand "instance-surface" {
+          nativeBuildInputs = [ pkgs.coreutils pkgs.gnugrep pkgs.diffutils ];
+        } ''
+          set -euo pipefail
+          OUT=$out
+          fail() { echo "FAIL: $*" >&2; exit 1; }
+          work="$TMPDIR/inst"; mkdir -p "$work"
+
+          ${lib.concatMapStrings (n: ''
+            W=${stubLaunchers.${n}}/bin/${n}
+            test -x "$W" || fail "INST ${n}: launcher not executable"
+            grep -Eq 'exec /nix/store/[^ "]+/bin/claude' "$W" || fail "INST ${n}: exec is not an absolute store path"
+            grep -q 'command -v' "$W" && fail "INST ${n}: PATH lookup present"
+            grep -q 'ANTHROPIC_BASE_URL' "$W" || fail "INST ${n}: ANTHROPIC_BASE_URL requirement missing"
+            grep -q 'ANTHROPIC_AUTH_TOKEN' "$W" || fail "INST ${n}: ANTHROPIC_AUTH_TOKEN requirement missing"
+            grep -q 'ANTHROPIC_API_KEY' "$W" || fail "INST ${n}: ANTHROPIC_API_KEY requirement missing"
+            grep -q '/${n}/env' "$W" || fail "INST ${n}: default env path missing"
+          '') (builtins.attrNames instances)}
+
+          A=${stubLaunchers.mimocode}/bin/mimocode
+          # Resolve the fourth launcher's bin from its own meta.mainProgram
+          # rather than hardcoding datacode, so control 0 below stays reachable
+          # even if the fourth instance is temporarily renamed.
+          B=${lib.getExe fourthLauncher}
+
+          # control 0: the renderings must genuinely differ before
+          # normalisation, otherwise the final cmp is vacuous.
+          cmp -s "$A" "$B" && fail "INST-04 vacuous: scripts identical before normalisation"
+
+          sed -e 's/mimocode/@NAME@/g' "$A" > "$work/a"
+          sed -e 's/datacode/@NAME@/g' "$B" > "$work/b"
+
+          # control 1: normalisation actually applied to both files.
+          grep -q '@NAME@' "$work/a" || fail "INST-04 normalisation not applied to mimocode"
+          grep -q '@NAME@' "$work/b" || fail "INST-04 normalisation not applied to fourth"
+
+          # control 2: the normalised file is still a real launcher.
+          grep -Eq 'exec /nix/store/' "$work/a" || fail "INST-04 normalised script lost its exec line"
+
+          # the invariant: data-only means identical after replacing the name.
+          cmp -s "$work/a" "$work/b" || { diff -u "$work/a" "$work/b" >&2 || true; fail "INST-04 scripts differ beyond interpolated values"; }
+
+          touch "$OUT"
+        '';
+
+        # DIST-03: the default-bundle layout is exactly one bin per instance and
+        # never claude. Uses stubBundle, never config.packages.default, so this
+        # check does not pull claude-code into its build closure.
+        bundle-layout = pkgs.runCommand "bundle-layout" {
+          nativeBuildInputs = [ pkgs.coreutils ];
+        } ''
+          set -euo pipefail
+          OUT=$out
+          B=${stubBundle}
+          names="${lib.concatStringsSep " " (builtins.attrNames instances)}"
+          for n in $names; do
+            test -e "$B/bin/$n" || { echo "FAIL: bundle missing bin/$n" >&2; exit 1; }
+          done
+          count=$(ls "$B/bin" | wc -l)
+          [ "$count" -eq ${toString (builtins.length (builtins.attrNames instances))} ] \
+            || { echo "FAIL: bundle bin count $count" >&2; exit 1; }
+          [ ! -e "$B/bin/claude" ] || { echo "FAIL: bundle ships claude" >&2; exit 1; }
+          touch "$OUT"
+        '';
+
+        # DIST-06: `nix run .#mimocode -- --version` delivers `--version` to the
+        # program (Nix consumes its own `--` separator). A literal `--` passed
+        # directly to the wrapper is also forwarded unchanged by `exec "$@"`.
+        passthrough = pkgs.runCommand "passthrough" {
+          nativeBuildInputs = [ pkgs.coreutils pkgs.gnugrep ];
+        } ''
+          set -euo pipefail
+          OUT=$out
+          work="$TMPDIR/pass"; mkdir -p "$work/xdg/mimocode"
+          cp ${validEnv} "$work/xdg/mimocode/env"; chmod 600 "$work/xdg/mimocode/env"
+          export XDG_CONFIG_HOME="$work/xdg" HOME="$work"
+          W=${stubLaunchers.mimocode}/bin/mimocode
+
+          got=$("$W" --version 2>/dev/null) || { echo "FAIL: wrapper exited $? for --version" >&2; exit 1; }
+          echo "$got" | grep -q 'STUB-ARGV: --version' || { echo "FAIL: --version not forwarded: $got" >&2; exit 1; }
+
+          got=$("$W" -- --version 2>/dev/null) || { echo "FAIL: wrapper exited $? for -- --version" >&2; exit 1; }
+          echo "$got" | grep -q 'STUB-ARGV: -- --version' || { echo "FAIL: literal -- not forwarded: $got" >&2; exit 1; }
+
+          touch "$OUT"
+        '';
 
         launcher-contract = pkgs.runCommand "launcher-contract" {
           nativeBuildInputs = [ pkgs.coreutils pkgs.gnugrep ];
