@@ -38,7 +38,9 @@ let
       "if [ -z \"\${${g}:-}\" ]; then missing+=(\"${g}\"); fi";
 
   extraEnvLines = lib.concatStringsSep "\n"
-    (lib.mapAttrsToList (k: v: "export ${k}=${lib.escapeShellArg v}") extraEnv);
+    (lib.mapAttrsToList
+      (k: v: "export ${lib.escapeShellArg k}=${lib.escapeShellArg v}")
+      extraEnv);
 
   resolution = if baked == "" then ''
     if [ -n "''${SHMULCODE_ENV_FILE:-}" ]; then
@@ -55,10 +57,18 @@ let
     if [ -n "''${SHMULCODE_ENV_FILE:-}" ]; then
       env_file="$SHMULCODE_ENV_FILE"; origin="SHMULCODE_ENV_FILE override"
     else
+      # CR-02: baked paths may reference runtime variables (e.g.
+      # ''${XDG_RUNTIME_DIR}/agenix/x.env). Expand under set +u so an unset
+      # variable degrades to an empty segment and the normal missing-file
+      # path reports it at exit 78 instead of nounset aborting at exit 1.
+      set +u
       env_file="${baked}"; origin="baked path"
+      set -u
     fi
   '';
 in
+assert lib.assertMsg (envFile == null || (builtins.isString envFile && envFile != ""))
+  "mkLauncher: envFile must be null or a non-empty path string (an empty string would silently fall back to the XDG/HOME path)";
 pkgs.writeShellApplication {
   inherit name;
   runtimeInputs = [ pkgs.coreutils ];          # stat only; bash is the interpreter
@@ -101,7 +111,9 @@ pkgs.writeShellApplication {
       echo "${name}: environment file contains CRLF line endings: $env_file" >&2
       exit 78
     fi
-    if ! "$BASH" -n "$env_file"; then
+    # SECURITY (CR-01): discard bash's diagnostic. It echoes the offending
+    # source line, which can be a line carrying a credential value.
+    if ! "$BASH" -n "$env_file" 2>/dev/null; then
       echo "${name}: environment file has syntax errors: $env_file" >&2
       exit 78
     fi
@@ -115,7 +127,10 @@ pkgs.writeShellApplication {
       exit 78
     fi
     set +a
+    # Re-assert strict mode: a sourced file can legitimately toggle these, and
+    # the wrapper's later checks must not run under weakened options.
     set -u
+    set -o errexit
 
     # ---- 8. validate required variables (names only, never values) ----
     missing=()
