@@ -204,8 +204,14 @@
           echo "$got" | grep -q 'STUB-ARGV' || fail "SEC-02 stub did not run"
           pass "SEC-02 PATH-stripped"
 
-          # SEC-03: credential values never appear in diagnostics
+          # SEC-03: credential values never appear in diagnostics.
           CANARY='sk-CANARY-DO-NOT-PRINT'
+          # Positive control: the detector must actually detect. Without this,
+          # every "canary absent" assertion below could pass vacuously if the
+          # stub stopped echoing (e.g. a typo in the variable name).
+          printf 'STUB-ARGV: %s\n' "$CANARY" > "$work/control.txt"
+          grep -q "$CANARY" "$work/control.txt" || fail "SEC-03 positive control (detector broken)"
+
           printf 'ANTHROPIC_BASE_URL=https://example.test\nANTHROPIC_AUTH_TOKEN=%s\n' "$CANARY" > "$work/xdg/testcode/env"
           chmod 600 "$work/xdg/testcode/env"
           set +e; diag=$(STUB_EXIT=0 "$W" 2>&1); set -e
@@ -214,23 +220,44 @@
           chmod 644 "$work/xdg/testcode/env"
           set +e; diag=$(STUB_EXIT=0 "$W" 2>&1); set -e
           echo "$diag" | grep -q "$CANARY" && fail "SEC-03 canary leaked in warnings"
+          # CR-01 regression: a syntax error on a credential-bearing line must
+          # not make bash -n echo that line (which would print the canary).
+          printf 'ANTHROPIC_BASE_URL=https://example.test\nANTHROPIC_API_KEY=%s(\n' "$CANARY" > "$work/xdg/testcode/env"
+          chmod 600 "$work/xdg/testcode/env"
+          set +e; diag=$(STUB_EXIT=0 "$W" 2>&1); rc=$?; set -e
+          [ "$rc" -eq 78 ] || fail "SEC-03/ENV-04 syntax error rc ($rc, want 78)"
+          echo "$diag" | grep -q "$CANARY" && fail "SEC-03 CR-01 canary leaked via bash -n"
           pass "SEC-03 no values in diagnostics"
 
           touch "$OUT"
         '';
 
-        # SEC-01: no eval-time secret access anywhere in the builder.
+        # SEC-01: no eval-time secret access anywhere in the flake's Nix source.
         # modules/checks.nix is excluded on purpose: it holds this pattern
         # literal and would match its own source.
+        #
+        # The regex covers the readFile family and its nixpkgs lib aliases
+        # (lib.fileContents, lib.importJSON/importTOML) plus types.path, which
+        # would copy a secret into the store. Bare path literals that look like
+        # secret files (./secrets/env) are flagged too — pass a string instead.
         sec01-no-eval-secret-reads = pkgs.runCommand "sec01-no-eval-secret-reads" {
           nativeBuildInputs = [ pkgs.gnugrep ];
         } ''
           set -euo pipefail
-          # Self-test: the regex must catch a violation when one exists.
-          printf 'builtins.readFile ./secret\n' > "$TMPDIR/bad.nix"
-          grep -qE 'readFile|types\.path|builtins\.path' "$TMPDIR/bad.nix" \
-            || { echo "SEC-01 FAIL: lint regex does not detect readFile" >&2; exit 1; }
-          if grep -rnE 'readFile|types\.path|builtins\.path' ${../lib} ${./pkgs.nix}; then
+          pattern='readFile|fileContents|importJSON|importTOML|types\.path|builtins\.path|\./[A-Za-z._/-]*(secret|secrets|\.env)'
+          # Self-test: the regex must catch every shape when one exists.
+          for bad in \
+            'builtins.readFile ./s' \
+            'lib.fileContents ./s' \
+            'lib.importJSON ./s' \
+            'types.path' \
+            'envFile = ./secrets/env;'
+          do
+            printf '%s\n' "$bad" > "$TMPDIR/bad.nix"
+            grep -qE "$pattern" "$TMPDIR/bad.nix" \
+              || { echo "SEC-01 FAIL: lint regex misses: $bad" >&2; exit 1; }
+          done
+          if grep -rnE "$pattern" ${../lib} ${./pkgs.nix} ${../flake.nix}; then
             echo "SEC-01 FAIL: eval-time secret access found above" >&2
             exit 1
           fi
