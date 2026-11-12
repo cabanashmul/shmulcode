@@ -2,3 +2,16 @@
 /result
 /result-*
 *.env
+
+# Claude Code / GSD runtime state — local to each clone, never shared.
+# Mirrors .git/info/exclude so a fresh clone is protected too (WR-01).
+/.claude/worktrees/
+/.claude/scheduled_tasks.lock
+/.claude/scheduled_tasks.json
+/.claude/routines/.state/
+/.claude/checkpoints/
+/.claude/mailbox/
+/.claude/agent-registry.json
+/.claude/agent-memory-local
+/.claude/first-run
+/.claude/assistant-daemon-state.json
