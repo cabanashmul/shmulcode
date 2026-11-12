@@ -233,9 +233,10 @@ assert _nameSafe;
             desc="$(desc_for "$name")"
             if [ -f "$env_file" ]; then
               mode="$(stat -L -c '%a' "$env_file" 2>/dev/null || true)"
-              printf '%s — %s | env: %s (present, mode %s, via %s)\n' "$name" "$desc" "$env_file" "''${mode:-unknown}" "$origin"
+              # Descriptions already begin with the instance name.
+              printf '%s | env: %s (present, mode %s, via %s)\n' "$desc" "$env_file" "''${mode:-unknown}" "$origin"
             else
-              printf '%s — %s | env: %s (missing, via %s) — run: shmulcode init %s\n' "$name" "$desc" "$env_file" "$origin" "$name"
+              printf '%s | env: %s (missing, via %s) — run: shmulcode init %s\n' "$desc" "$env_file" "$origin" "$name"
             fi
           done
         }
