@@ -79,7 +79,7 @@
         packages-surface =
           let
             names = builtins.attrNames instances;          # already sorted
-            expectedPackages = builtins.sort builtins.lessThan (names ++ [ "default" ]);
+            expectedPackages = builtins.sort builtins.lessThan (names ++ [ "default" "shmulcode" ]);
           in
           builtins.seq config.packages.default.drvPath (
             assert builtins.all (n: builtins.elem n names) [ "mimocode" "deepcode" "grokcode" ];
@@ -416,7 +416,7 @@
           # CR-01: fail closed. grep exits 0 = match (leak), 1 = clean,
           # 2 = could not scan (e.g. a missing target) — 2 must never read clean.
           rc=0
-          grep -rnE "$pattern" ${../lib} ${./pkgs.nix} ${./packages.nix} ${./_instances.nix} ${../flake.nix} || rc=$?
+          grep -rnE "$pattern" ${../lib} ${./pkgs.nix} ${./packages.nix} ${./admin.nix} ${./_instances.nix} ${../flake.nix} || rc=$?
           case "$rc" in
             0) echo "SEC-01 FAIL: eval-time secret access found above" >&2; exit 1 ;;
             1) : ;;
