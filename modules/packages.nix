@@ -2,24 +2,29 @@
 let
   instances = import ./_instances.nix;
   mkLauncher = import ../lib/mk-launcher.nix;
+  inherit (import ../lib/mk-instance-launchers.nix { inherit lib mkLauncher; })
+    mkInstanceLaunchers;
   instanceNames = builtins.attrNames instances;
 in
 assert lib.assertMsg
-  (builtins.all (n: builtins.match "[A-Za-z0-9._-]+" n != null) instanceNames)
-  "shmulcode: instance names must be safe shell tokens ([A-Za-z0-9._-]+)";
+  (builtins.all (n: builtins.match "[A-Za-z0-9][A-Za-z0-9._-]*" n != null) instanceNames)
+  "shmulcode: instance names must start alphanumeric and be safe shell tokens ([A-Za-z0-9][A-Za-z0-9._-]*)";
 assert lib.assertMsg
   (builtins.all (n: instances.${n}.name == n) instanceNames)
   "shmulcode: each instance's name field must equal its attrset key";
 assert lib.assertMsg
   (builtins.all (n: !(instances.${n} ? envFile)) instanceNames)
   "shmulcode: built-in instances must not bake an envFile; runtime resolution is the contract";
+assert lib.assertMsg
+  (builtins.all (n: !(builtins.elem n [ "default" "claude" "shmulcode" ])) instanceNames)
+  "shmulcode: instance names must not shadow reserved package names (default, claude, shmulcode)";
 {
   perSystem = { pkgs, ... }:
     let
       # One builder for every instance; provider differences are data only.
-      launchers = lib.mapAttrs
-        (_: data: mkLauncher ({ inherit pkgs; } // data))
-        instances;
+      # The mapping is shared with the INST-04 check so that check exercises
+      # the real packaging path (see lib/mk-instance-launchers.nix).
+      launchers = mkInstanceLaunchers instances pkgs pkgs.claude-code;
     in
     {
       # packages.default is the profile-install surface: launcher binaries

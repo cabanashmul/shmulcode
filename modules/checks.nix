@@ -20,18 +20,26 @@
 
       mk = args: mkLauncher ({ inherit pkgs; claudePackage = stubClaude; } // args);
 
+      # CR-02: use the SAME mapping modules/packages.nix uses, so the data-only
+      # proof exercises the real packaging path — a per-provider branch added to
+      # that mapping is caught here, whereas a private mkLauncher copy would
+      # not catch it.
+      inherit (import ../lib/mk-instance-launchers.nix { inherit lib mkLauncher; })
+        mkInstanceLaunchers;
+
       # Stub-backed launchers for the real instance data: cheap, offline, and
       # never the real claude-code closure.
-      stubLaunchers = lib.mapAttrs (_: data: mk data) instances;
+      stubLaunchers = mkInstanceLaunchers instances pkgs stubClaude;
 
-      # A hypothetical fourth provider defined purely as data. It reuses the
-      # mimocode entry and overrides only what a new provider would change, so
-      # any script difference beyond the name means the builder is not
-      # data-driven (INST-04).
-      fourthLauncher = mk (instances.mimocode // {
-        name = "datacode";
-        description = "hypothetical fourth provider (data-only proof)";
-      });
+      # A hypothetical fourth provider defined purely as data, routed through
+      # the shared mapping. It reuses the mimocode entry and overrides only what
+      # a new provider would change, so any script difference beyond the name
+      # means the instance→launcher path is not data-driven (INST-04).
+      fourthLauncher =
+        (mkInstanceLaunchers
+          { datacode = instances.mimocode // { name = "datacode"; description = "hypothetical fourth provider (data-only proof)"; }; }
+          pkgs
+          stubClaude).datacode;
 
       # Mirrors packages.default with stub launchers, so the layout check is
       # cheap and offline while still exercising the exact symlinkJoin shape.
@@ -81,6 +89,12 @@
             assert config.packages.default.name == "shmulcode";
             assert map (d: d.name) config.packages.default.launchers == names;
             assert !(builtins.elem "claude" (map (d: d.name) config.packages.default.launchers));
+            # WR-01: the bundle actually joins the launchers — a regression to
+            # `paths = [ launchers.mimocode ]` while passthru stays correct
+            # would otherwise pass every check. symlinkJoin keeps `paths` as
+            # context-carrying strings, so compare by store path.
+            assert map toString config.packages.default.paths == map toString config.packages.default.launchers;
+            assert builtins.length config.packages.default.paths == builtins.length names;
             assert builtins.all (n: config.apps.${n}.type == "app") names;
             assert builtins.all (n: config.apps.${n}.program == lib.getExe config.packages.${n}) names;
             pkgs.writeText "packages-surface-ok" "ok"
@@ -103,11 +117,19 @@
             test -x "$W" || fail "INST ${n}: launcher not executable"
             grep -Eq 'exec /nix/store/[^ "]+/bin/claude' "$W" || fail "INST ${n}: exec is not an absolute store path"
             grep -q 'command -v' "$W" && fail "INST ${n}: PATH lookup present"
-            grep -q 'ANTHROPIC_BASE_URL' "$W" || fail "INST ${n}: ANTHROPIC_BASE_URL requirement missing"
-            grep -q 'ANTHROPIC_AUTH_TOKEN' "$W" || fail "INST ${n}: ANTHROPIC_AUTH_TOKEN requirement missing"
-            grep -q 'ANTHROPIC_API_KEY' "$W" || fail "INST ${n}: ANTHROPIC_API_KEY requirement missing"
             grep -q '/${n}/env' "$W" || fail "INST ${n}: default env path missing"
-          '') (builtins.attrNames instances)}
+          ''
+          # WR-02: assert the required vars this instance actually declares,
+          # not a hardcoded pair — otherwise a data-only provider with a
+          # different requiredVars shape would fail the check, contradicting
+          # "adding an instance is data only".
+          + lib.concatMapStrings
+            (g: lib.concatMapStrings (v: ''
+              grep -q '${v}' "$W" || fail "INST ${n}: ${v} requirement missing"
+            '') (if builtins.isList g then g else [ g ]))
+            (instances.${n}.requiredVars
+              or [ "ANTHROPIC_BASE_URL" [ "ANTHROPIC_AUTH_TOKEN" "ANTHROPIC_API_KEY" ] ])
+          ) (builtins.attrNames instances)}
 
           A=${stubLaunchers.mimocode}/bin/mimocode
           # Resolve the fourth launcher's bin from its own meta.mainProgram
@@ -391,10 +413,15 @@
             grep -qE "$pattern" "$TMPDIR/bad.nix" \
               || { echo "SEC-01 FAIL: lint regex misses: $bad" >&2; exit 1; }
           done
-          if grep -rnE "$pattern" ${../lib} ${./pkgs.nix} ${./packages.nix} ${./_instances.nix} ${../flake.nix}; then
-            echo "SEC-01 FAIL: eval-time secret access found above" >&2
-            exit 1
-          fi
+          # CR-01: fail closed. grep exits 0 = match (leak), 1 = clean,
+          # 2 = could not scan (e.g. a missing target) — 2 must never read clean.
+          rc=0
+          grep -rnE "$pattern" ${../lib} ${./pkgs.nix} ${./packages.nix} ${./_instances.nix} ${../flake.nix} || rc=$?
+          case "$rc" in
+            0) echo "SEC-01 FAIL: eval-time secret access found above" >&2; exit 1 ;;
+            1) : ;;
+            *) echo "SEC-01 ERROR: lint could not scan its targets (grep exit $rc)" >&2; exit 1 ;;
+          esac
           touch "$out"
         '';
       };
