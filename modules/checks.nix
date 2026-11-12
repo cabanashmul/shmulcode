@@ -43,9 +43,11 @@
 
       # Mirrors packages.default with stub launchers, so the layout check is
       # cheap and offline while still exercising the exact symlinkJoin shape.
+      # shmulcode is the real admin package: its script has no claude exec, so
+      # it adds nothing to the build closure.
       stubBundle = pkgs.symlinkJoin {
         name = "shmulcode";
-        paths = builtins.attrValues stubLaunchers;
+        paths = builtins.attrValues stubLaunchers ++ [ config.packages.shmulcode ];
       };
 
       name = "testcode";
@@ -86,15 +88,18 @@
             assert builtins.attrNames config.packages == expectedPackages;
             assert builtins.attrNames config.apps == names;
             assert builtins.all (n: config.packages.${n}.meta.mainProgram == n) names;
+            assert config.packages.shmulcode.meta.mainProgram == "shmulcode";
             assert config.packages.default.name == "shmulcode";
+            # passthru.launchers keeps its Phase 3 meaning: launchers only.
             assert map (d: d.name) config.packages.default.launchers == names;
             assert !(builtins.elem "claude" (map (d: d.name) config.packages.default.launchers));
-            # WR-01: the bundle actually joins the launchers — a regression to
-            # `paths = [ launchers.mimocode ]` while passthru stays correct
-            # would otherwise pass every check. symlinkJoin keeps `paths` as
-            # context-carrying strings, so compare by store path.
-            assert map toString config.packages.default.paths == map toString config.packages.default.launchers;
-            assert builtins.length config.packages.default.paths == builtins.length names;
+            # ADMIN: the bundle joins the launchers AND the admin command.
+            assert config.packages.default.admin == config.packages.shmulcode;
+            # WR-01 (extended): compare by store path so a regression to a
+            # launcher-only bundle fails here even if passthru stays correct.
+            assert map toString config.packages.default.paths
+              == map toString (config.packages.default.launchers ++ [ config.packages.default.admin ]);
+            assert builtins.length config.packages.default.paths == builtins.length names + 1;
             assert builtins.all (n: config.apps.${n}.type == "app") names;
             assert builtins.all (n: config.apps.${n}.program == lib.getExe config.packages.${n}) names;
             pkgs.writeText "packages-surface-ok" "ok"
@@ -157,23 +162,29 @@
           touch "$OUT"
         '';
 
-        # DIST-03: the default-bundle layout is exactly one bin per instance and
-        # never claude. Uses stubBundle, never config.packages.default, so this
-        # check does not pull claude-code into its build closure.
+        # DIST-03 + ADMIN-03 bundling: the default bundle is exactly one bin per
+        # instance plus `shmulcode`, and never `claude`. Uses stubBundle, never
+        # config.packages.default, so this check does not pull claude-code in.
         bundle-layout = pkgs.runCommand "bundle-layout" {
-          nativeBuildInputs = [ pkgs.coreutils ];
+          nativeBuildInputs = [ pkgs.coreutils pkgs.gnugrep ];
         } ''
           set -euo pipefail
           OUT=$out
+          fail() { echo "FAIL: $*" >&2; exit 1; }
           B=${stubBundle}
           names="${lib.concatStringsSep " " (builtins.attrNames instances)}"
           for n in $names; do
-            test -e "$B/bin/$n" || { echo "FAIL: bundle missing bin/$n" >&2; exit 1; }
+            test -e "$B/bin/$n" || fail "bundle missing bin/$n"
           done
+          test -x "$B/bin/shmulcode" || fail "bundle missing executable bin/shmulcode"
           count=$(ls "$B/bin" | wc -l)
-          [ "$count" -eq ${toString (builtins.length (builtins.attrNames instances))} ] \
-            || { echo "FAIL: bundle bin count $count" >&2; exit 1; }
-          [ ! -e "$B/bin/claude" ] || { echo "FAIL: bundle ships claude" >&2; exit 1; }
+          [ "$count" -eq ${toString (builtins.length (builtins.attrNames instances) + 1)} ] \
+            || fail "bundle bin count $count (want ${toString (builtins.length (builtins.attrNames instances) + 1)})"
+          [ ! -e "$B/bin/claude" ] || fail "bundle ships claude"
+          # The admin command is diagnostics only: it must never launch claude.
+          if grep -qE 'exec /nix/store/[^ "]+/bin/claude' "$B/bin/shmulcode"; then
+            fail "admin command execs claude"
+          fi
           touch "$OUT"
         '';
 

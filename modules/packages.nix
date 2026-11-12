@@ -19,7 +19,7 @@ assert lib.assertMsg
   (builtins.all (n: !(builtins.elem n [ "default" "claude" "shmulcode" ])) instanceNames)
   "shmulcode: instance names must not shadow reserved package names (default, claude, shmulcode)";
 {
-  perSystem = { pkgs, ... }:
+  perSystem = { pkgs, config, ... }:
     let
       # One builder for every instance; provider differences are data only.
       # The mapping is shared with the INST-04 check so that check exercises
@@ -27,14 +27,17 @@ assert lib.assertMsg
       launchers = mkInstanceLaunchers instances pkgs pkgs.claude-code;
     in
     {
-      # packages.default is the profile-install surface: launcher binaries
-      # only. Including pkgs.claude-code would collide with a consumer's
-      # programs.claude-code and inflate the profile (DIST-03).
+      # packages.default is the profile-install surface: the three launcher
+      # binaries plus the admin command. Including pkgs.claude-code would
+      # collide with a consumer's programs.claude-code and inflate the
+      # profile (DIST-03). passthru.launchers keeps its Phase 3 meaning
+      # (launchers only); passthru.admin exposes the admin command.
       packages = launchers // {
         default = pkgs.symlinkJoin {
           name = "shmulcode";
-          paths = builtins.attrValues launchers;
+          paths = builtins.attrValues launchers ++ [ config.packages.shmulcode ];
           passthru.launchers = builtins.attrValues launchers;
+          passthru.admin = config.packages.shmulcode;
         };
       };
 
