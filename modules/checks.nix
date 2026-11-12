@@ -155,6 +155,28 @@
           touch "$OUT"
         '';
 
+        # DIST-06: `nix run .#mimocode -- --version` delivers `--version` to the
+        # program (Nix consumes its own `--` separator). A literal `--` passed
+        # directly to the wrapper is also forwarded unchanged by `exec "$@"`.
+        passthrough = pkgs.runCommand "passthrough" {
+          nativeBuildInputs = [ pkgs.coreutils pkgs.gnugrep ];
+        } ''
+          set -euo pipefail
+          OUT=$out
+          work="$TMPDIR/pass"; mkdir -p "$work/xdg/mimocode"
+          cp ${validEnv} "$work/xdg/mimocode/env"; chmod 600 "$work/xdg/mimocode/env"
+          export XDG_CONFIG_HOME="$work/xdg" HOME="$work"
+          W=${stubLaunchers.mimocode}/bin/mimocode
+
+          got=$("$W" --version 2>/dev/null) || { echo "FAIL: wrapper exited $? for --version" >&2; exit 1; }
+          echo "$got" | grep -q 'STUB-ARGV: --version' || { echo "FAIL: --version not forwarded: $got" >&2; exit 1; }
+
+          got=$("$W" -- --version 2>/dev/null) || { echo "FAIL: wrapper exited $? for -- --version" >&2; exit 1; }
+          echo "$got" | grep -q 'STUB-ARGV: -- --version' || { echo "FAIL: literal -- not forwarded: $got" >&2; exit 1; }
+
+          touch "$OUT"
+        '';
+
         launcher-contract = pkgs.runCommand "launcher-contract" {
           nativeBuildInputs = [ pkgs.coreutils pkgs.gnugrep ];
         } ''
