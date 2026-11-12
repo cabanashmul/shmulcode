@@ -278,6 +278,20 @@
           [ "$rc" -eq 78 ] || fail "doctor CRLF rc $rc (want 78)"
           echo "$out" | grep -q 'CRLF' || fail "doctor: CRLF not named"
 
+          # CR-01: a syntax error on a credential line must not make doctor
+          # echo the line (bash -n diagnostic) — 78 with no canary.
+          printf 'ANTHROPIC_BASE_URL=https://example.test\nANTHROPIC_API_KEY=%s(\n' "$CANARY" > "$work/xdg/mimocode/env"
+          chmod 600 "$work/xdg/mimocode/env"
+          set +e; out=$("$S" doctor mimocode 2>&1); rc=$?; set -e
+          [ "$rc" -eq 78 ] || fail "doctor syntax rc $rc (want 78)"
+          echo "$out" | grep -q "$CANARY" && fail "doctor leaked canary via syntax error"
+
+          # CR-02: ambient xtrace must not leak values from doctor either.
+          printf 'ANTHROPIC_BASE_URL=https://example.test\nANTHROPIC_AUTH_TOKEN=%s\n' "$CANARY" > "$work/xdg/mimocode/env"
+          chmod 600 "$work/xdg/mimocode/env"
+          set +e; out=$(env SHELLOPTS=xtrace "$S" doctor mimocode 2>&1); rc=$?; set -e
+          echo "$out" | grep -q "$CANARY" && fail "doctor leaked canary via ambient xtrace"
+
           printf 'ANTHROPIC_BASE_URL=https://example.test\nANTHROPIC_AUTH_TOKEN=%s\n' "$CANARY" > "$work/xdg/mimocode/env"
           chmod 600 "$work/xdg/mimocode/env"
           set +e; out=$("$S" doctor mimocode 2>&1); rc=$?; set -e
@@ -559,6 +573,22 @@
           set +e; diag=$(STUB_EXIT=0 "$W" 2>&1); rc=$?; set -e
           [ "$rc" -eq 78 ] || fail "SEC-03/ENV-04 syntax error rc ($rc, want 78)"
           echo "$diag" | grep -q "$CANARY" && fail "SEC-03 CR-01 canary leaked via bash -n"
+
+          # CR-02a: ambient SHELLOPTS=xtrace must not trace assignments.
+          printf 'ANTHROPIC_BASE_URL=https://example.test\nANTHROPIC_AUTH_TOKEN=%s\n' "$CANARY" > "$work/xdg/testcode/env"
+          chmod 600 "$work/xdg/testcode/env"
+          set +e; diag=$(env SHELLOPTS=xtrace STUB_EXIT=0 "$W" 2>&1); rc=$?; set -e
+          [ "$rc" -eq 0 ] || fail "SEC-03 xtrace run rc ($rc)"
+          echo "$diag" | grep -q "$CANARY" && fail "SEC-03 CR-02 canary leaked via ambient xtrace"
+
+          # CR-02b: a `set -x` inside the env file is rejected outright (78) —
+          # it cannot be outrun, since it takes effect mid-file.
+          printf 'set -x\nANTHROPIC_BASE_URL=https://example.test\nANTHROPIC_AUTH_TOKEN=%s\n' "$CANARY" > "$work/xdg/testcode/env"
+          chmod 600 "$work/xdg/testcode/env"
+          set +e; diag=$(STUB_EXIT=0 "$W" 2>&1); rc=$?; set -e
+          [ "$rc" -eq 78 ] || fail "SEC-03 in-file set -x rc ($rc, want 78)"
+          echo "$diag" | grep -q "$CANARY" && fail "SEC-03 CR-02 canary leaked via in-file set -x"
+          echo "$diag" | grep -q 'enables shell tracing' || fail "SEC-03 tracing rejection not reported"
           pass "SEC-03 no values in diagnostics"
 
           touch "$OUT"

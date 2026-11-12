@@ -45,6 +45,13 @@ pkgs.writeShellApplication {
   runtimeInputs = [ pkgs.coreutils ];          # stat only; bash is the interpreter
   meta = { inherit description; mainProgram = name; };
   text = ''
+    # ---- 0. never trace (CR-02) ----
+    # `SHELLOPTS=xtrace` in the ambient environment, or a `set -x` line inside
+    # the env file, would echo every assignment and every value-expanding test
+    # to stderr — leaking credentials. Disable unconditionally on entry.
+    set +x
+    set +v
+
     # ---- 1. resolve (override > baked > XDG/HOME) ----
     ${resolution}
 
@@ -87,6 +94,14 @@ pkgs.writeShellApplication {
       echo "${name}: environment file contains CRLF line endings: $env_file" >&2
       exit 78
     fi
+    # SECURITY (CR-02): a file that enables shell tracing would echo its own
+    # assignments — including credential VALUES — to stderr. Reject it rather
+    # than trying to outrace it, since `set -x` takes effect mid-file.
+    if [[ "$(<"$env_file")" =~ (^|$'\n')[[:space:]]*set[[:space:]]+[-+][a-zA-Z]*[xv] ]]; then
+      echo "${name}: environment file enables shell tracing; remove any 'set -x'/'set -v'" >&2
+      exit 78
+    fi
+
     # SECURITY (CR-01): discard bash's diagnostic. It echoes the offending
     # source line, which can be a line carrying a credential value.
     if ! "$BASH" -n "$env_file" 2>/dev/null; then
@@ -107,6 +122,10 @@ pkgs.writeShellApplication {
     # the wrapper's later checks must not run under weakened options.
     set -u
     set -o errexit
+    # CR-02: the env file may have run `set -x`; stop tracing before any
+    # value-expanding test below (e.g. [ -z "$ANTHROPIC_AUTH_TOKEN" ]).
+    set +x
+    set +v
 
     # ---- 8. validate required variables (names only, never values) ----
     missing=()

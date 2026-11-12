@@ -133,11 +133,12 @@ assert _nameSafe;
             echo "shmulcode: refusing to overwrite existing env file: $env_file" >&2
             exit 73
           fi
+          # umask applies to the directory too (IN-02): create it private.
+          umask 077
           if ! mkdir -p "$(dirname "$env_file")"; then
             echo "shmulcode: cannot create directory for: $env_file" >&2
             exit 73
           fi
-          umask 077
           set -C
           if ! : > "$env_file"; then
             echo "shmulcode: cannot create env file: $env_file" >&2
@@ -146,7 +147,11 @@ assert _nameSafe;
           set +C
           case "$name" in
         ${templateCases}    esac
-          chmod 600 "$env_file"
+          # WR-02: a failed chmod must report EX_CANTCREAT, not exit 1.
+          if ! chmod 600 "$env_file"; then
+            echo "shmulcode: cannot set mode 600 on: $env_file" >&2
+            exit 73
+          fi
           echo "shmulcode: wrote $env_file (mode 600)"
           echo "shmulcode: fill in the values; the file is sourced as shell and never committed"
         }
@@ -193,6 +198,20 @@ assert _nameSafe;
             exit 78
           fi
 
+          # SECURITY (CR-02): reject tracing directives — they would print
+          # assignment lines (values) to stderr.
+          if [[ "$(<"$env_file")" =~ (^|$'\n')[[:space:]]*set[[:space:]]+[-+][a-zA-Z]*[xv] ]]; then
+            echo "status: environment file enables shell tracing; remove any 'set -x'/'set -v'"
+            exit 78
+          fi
+
+          # SECURITY (CR-01): discard bash's syntax diagnostic — it echoes the
+          # offending source line, which may carry a credential value.
+          if ! "$BASH" -n "$env_file" 2>/dev/null; then
+            echo "status: environment file has syntax errors"
+            exit 78
+          fi
+
           # Mirror the wrapper: ambient provider vars would make doctor lie about
           # what the file defines, so drop them before sourcing.
           for __v in "''${!ANTHROPIC_@}"; do unset -- "$__v"; done
@@ -209,6 +228,10 @@ assert _nameSafe;
           set -u
           # Re-assert strict mode: the sourced file may have toggled these.
           set -o errexit
+          # CR-02: stop any tracing the env file may have enabled, before
+          # value-expanding tests below.
+          set +x
+          set +v
 
           echo "variables (presence only):"
           case "$name" in
@@ -220,6 +243,11 @@ assert _nameSafe;
           if [ "''${#missing[@]}" -ne 0 ]; then
             echo "status: missing required variables: ''${missing[*]}"
             exit 78
+          fi
+
+          # Mirror the launcher's documented auth-conflict warning (WR-01).
+          if [ -n "''${ANTHROPIC_AUTH_TOKEN:-}" ] && [ -n "''${ANTHROPIC_API_KEY:-}" ]; then
+            echo "status: warning: both ANTHROPIC_AUTH_TOKEN and ANTHROPIC_API_KEY set; auth may not work as expected"
           fi
 
           echo "status: usable"
@@ -242,6 +270,10 @@ assert _nameSafe;
         }
 
         main() {
+          # CR-02: `SHELLOPTS=xtrace` in the ambient environment would trace
+          # every assignment and test, leaking credential values to stderr.
+          set +x
+          set +v
           cmd="''${1:-}"
           case "$cmd" in
             "") usage; exit 64 ;;
