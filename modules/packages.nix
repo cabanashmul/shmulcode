@@ -1,0 +1,47 @@
+{ lib, ... }:
+let
+  instances = import ./_instances.nix;
+  mkLauncher = import ../lib/mk-launcher.nix;
+  instanceNames = builtins.attrNames instances;
+in
+assert lib.assertMsg
+  (builtins.all (n: builtins.match "[A-Za-z0-9._-]+" n != null) instanceNames)
+  "shmulcode: instance names must be safe shell tokens ([A-Za-z0-9._-]+)";
+assert lib.assertMsg
+  (builtins.all (n: instances.${n}.name == n) instanceNames)
+  "shmulcode: each instance's name field must equal its attrset key";
+assert lib.assertMsg
+  (builtins.all (n: !(instances.${n} ? envFile)) instanceNames)
+  "shmulcode: built-in instances must not bake an envFile; runtime resolution is the contract";
+{
+  perSystem = { pkgs, ... }:
+    let
+      # One builder for every instance; provider differences are data only.
+      launchers = lib.mapAttrs
+        (_: data: mkLauncher ({ inherit pkgs; } // data))
+        instances;
+    in
+    {
+      # packages.default is the profile-install surface: launcher binaries
+      # only. Including pkgs.claude-code would collide with a consumer's
+      # programs.claude-code and inflate the profile (DIST-03).
+      packages = launchers // {
+        default = pkgs.symlinkJoin {
+          name = "shmulcode";
+          paths = builtins.attrValues launchers;
+          passthru.launchers = builtins.attrValues launchers;
+        };
+      };
+
+      # Explicit apps: nix run resolves apps before packages, and the string
+      # form is portable (flake-parts would coerce a derivation, but passing
+      # lib.getExe explicitly matches the verified shape).
+      apps = lib.mapAttrs
+        (name: pkg: {
+          type = "app";
+          program = lib.getExe pkg;
+          meta.description = instances.${name}.description;
+        })
+        launchers;
+    };
+}
