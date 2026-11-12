@@ -119,7 +119,6 @@ assert _nameSafe;
         # (already allowlist-validated), so a crafted name can never reach this path.
         resolve_env() {
           ${resolver.mkResolution { nameExpr = "$name"; errorLabel = "$name"; }}
-          : "$origin" # consumed by doctor/list; keeps shellcheck quiet until then
         }
 
         desc_for() {
@@ -153,11 +152,92 @@ assert _nameSafe;
         }
 
         cmd_doctor() {
-          : # implemented in the next task
+          name="$1"
+          resolve_env
+          echo "instance: $name"
+          echo "resolved by: $origin"
+          echo "env file: $env_file"
+
+          if [ ! -e "$env_file" ] && [ ! -L "$env_file" ]; then
+            echo "status: missing"
+            echo "next: run 'shmulcode init $name'"
+            exit 78
+          fi
+          if [ ! -f "$env_file" ]; then
+            echo "status: not a regular file"
+            exit 78
+          fi
+          ftype="$(stat -L -c '%F' "$env_file" 2>/dev/null || echo unknown)"
+          mode="$(stat -L -c '%a' "$env_file" 2>/dev/null || true)"
+          owner="$(stat -L -c '%U:%G' "$env_file" 2>/dev/null || echo unknown)"
+          echo "type: $ftype"
+          echo "mode: ''${mode:-unknown}"
+          echo "owner: $owner"
+          if [ -n "$mode" ] && (( (8#$mode & 8#077) != 0 )); then
+            echo "warning: $env_file is group/world-accessible (mode $mode); chmod 600"
+          fi
+          if [ ! -r "$env_file" ]; then
+            echo "status: not readable"
+            exit 78
+          fi
+
+          # Mirror the wrapper's BOM/CRLF preflight (lib/mk-launcher.nix step 6).
+          # Without this, doctor could say "usable, exit 0" for a file the
+          # launcher rejects with 78 — the exact drift shared resolution prevents.
+          if [[ "$(<"$env_file")" == $'\xef\xbb\xbf'* ]]; then
+            echo "status: environment file starts with a UTF-8 BOM"
+            exit 78
+          fi
+          if [[ "$(<"$env_file")" == *$'\r'* ]]; then
+            echo "status: environment file contains CRLF line endings"
+            exit 78
+          fi
+
+          # Mirror the wrapper: ambient provider vars would make doctor lie about
+          # what the file defines, so drop them before sourcing.
+          for __v in "''${!ANTHROPIC_@}"; do unset -- "$__v"; done
+          unset __v
+
+          set +u
+          set -a
+          # shellcheck source=/dev/null
+          if ! . "$env_file"; then
+            echo "status: failed to load env file"
+            exit 78
+          fi
+          set +a
+          set -u
+          # Re-assert strict mode: the sourced file may have toggled these.
+          set -o errexit
+
+          echo "variables (presence only):"
+          case "$name" in
+        ${presenceCases}    esac
+
+          missing=()
+          case "$name" in
+        ${requiredCases}    esac
+          if [ "''${#missing[@]}" -ne 0 ]; then
+            echo "status: missing required variables: ''${missing[*]}"
+            exit 78
+          fi
+
+          echo "status: usable"
+          echo "next: run 'claude doctor' for Claude Code's own diagnostics"
         }
 
         cmd_list() {
-          : # implemented in the next task
+          for n in ${lib.concatStringsSep " " names}; do
+            name="$n"
+            resolve_env
+            desc="$(desc_for "$name")"
+            if [ -f "$env_file" ]; then
+              mode="$(stat -L -c '%a' "$env_file" 2>/dev/null || true)"
+              printf '%s — %s | env: %s (present, mode %s, via %s)\n' "$name" "$desc" "$env_file" "''${mode:-unknown}" "$origin"
+            else
+              printf '%s — %s | env: %s (missing, via %s) — run: shmulcode init %s\n' "$name" "$desc" "$env_file" "$origin" "$name"
+            fi
+          done
         }
 
         main() {
