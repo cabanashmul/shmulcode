@@ -43,9 +43,11 @@
 
       # Mirrors packages.default with stub launchers, so the layout check is
       # cheap and offline while still exercising the exact symlinkJoin shape.
+      # shmulcode is the real admin package: its script has no claude exec, so
+      # it adds nothing to the build closure.
       stubBundle = pkgs.symlinkJoin {
         name = "shmulcode";
-        paths = builtins.attrValues stubLaunchers;
+        paths = builtins.attrValues stubLaunchers ++ [ config.packages.shmulcode ];
       };
 
       name = "testcode";
@@ -86,15 +88,18 @@
             assert builtins.attrNames config.packages == expectedPackages;
             assert builtins.attrNames config.apps == names;
             assert builtins.all (n: config.packages.${n}.meta.mainProgram == n) names;
+            assert config.packages.shmulcode.meta.mainProgram == "shmulcode";
             assert config.packages.default.name == "shmulcode";
+            # passthru.launchers keeps its Phase 3 meaning: launchers only.
             assert map (d: d.name) config.packages.default.launchers == names;
             assert !(builtins.elem "claude" (map (d: d.name) config.packages.default.launchers));
-            # WR-01: the bundle actually joins the launchers — a regression to
-            # `paths = [ launchers.mimocode ]` while passthru stays correct
-            # would otherwise pass every check. symlinkJoin keeps `paths` as
-            # context-carrying strings, so compare by store path.
-            assert map toString config.packages.default.paths == map toString config.packages.default.launchers;
-            assert builtins.length config.packages.default.paths == builtins.length names;
+            # ADMIN: the bundle joins the launchers AND the admin command.
+            assert config.packages.default.admin == config.packages.shmulcode;
+            # WR-01 (extended): compare by store path so a regression to a
+            # launcher-only bundle fails here even if passthru stays correct.
+            assert map toString config.packages.default.paths
+              == map toString (config.packages.default.launchers ++ [ config.packages.default.admin ]);
+            assert builtins.length config.packages.default.paths == builtins.length names + 1;
             assert builtins.all (n: config.apps.${n}.type == "app") names;
             assert builtins.all (n: config.apps.${n}.program == lib.getExe config.packages.${n}) names;
             pkgs.writeText "packages-surface-ok" "ok"
@@ -157,23 +162,194 @@
           touch "$OUT"
         '';
 
-        # DIST-03: the default-bundle layout is exactly one bin per instance and
-        # never claude. Uses stubBundle, never config.packages.default, so this
-        # check does not pull claude-code into its build closure.
+        # DIST-03 + ADMIN-03 bundling: the default bundle is exactly one bin per
+        # instance plus `shmulcode`, and never `claude`. Uses stubBundle, never
+        # config.packages.default, so this check does not pull claude-code in.
         bundle-layout = pkgs.runCommand "bundle-layout" {
-          nativeBuildInputs = [ pkgs.coreutils ];
+          nativeBuildInputs = [ pkgs.coreutils pkgs.gnugrep ];
         } ''
           set -euo pipefail
           OUT=$out
+          fail() { echo "FAIL: $*" >&2; exit 1; }
           B=${stubBundle}
           names="${lib.concatStringsSep " " (builtins.attrNames instances)}"
           for n in $names; do
-            test -e "$B/bin/$n" || { echo "FAIL: bundle missing bin/$n" >&2; exit 1; }
+            test -e "$B/bin/$n" || fail "bundle missing bin/$n"
           done
+          test -x "$B/bin/shmulcode" || fail "bundle missing executable bin/shmulcode"
           count=$(ls "$B/bin" | wc -l)
-          [ "$count" -eq ${toString (builtins.length (builtins.attrNames instances))} ] \
-            || { echo "FAIL: bundle bin count $count" >&2; exit 1; }
-          [ ! -e "$B/bin/claude" ] || { echo "FAIL: bundle ships claude" >&2; exit 1; }
+          [ "$count" -eq ${toString (builtins.length (builtins.attrNames instances) + 1)} ] \
+            || fail "bundle bin count $count (want ${toString (builtins.length (builtins.attrNames instances) + 1)})"
+          [ ! -e "$B/bin/claude" ] || fail "bundle ships claude"
+          # The admin command is diagnostics only: it must never launch claude.
+          if grep -qE 'exec /nix/store/[^ "]+/bin/claude' "$B/bin/shmulcode"; then
+            fail "admin command execs claude"
+          fi
+          touch "$OUT"
+        '';
+
+        # ADMIN-01: init writes a 0600 values-free template, refuses to
+        # clobber, honours SHMULCODE_ENV_FILE, and rejects bad names with 64.
+        admin-init = pkgs.runCommand "admin-init" {
+          nativeBuildInputs = [ pkgs.coreutils pkgs.gnugrep ];
+        } ''
+          set -euo pipefail
+          OUT=$out
+          fail() { echo "FAIL: $*" >&2; exit 1; }
+          work="$TMPDIR/admin-init"; mkdir -p "$work/xdg"
+          export XDG_CONFIG_HOME="$work/xdg" HOME="$work"
+          S=${config.packages.shmulcode}/bin/shmulcode
+
+          set +e; out=$("$S" 2>&1); rc=$?; set -e
+          [ "$rc" -eq 64 ] || fail "no-arg rc $rc (want 64)"
+          echo "$out" | grep -q 'usage: shmulcode' || fail "usage text missing"
+          set +e; out=$("$S" nosuchverb 2>&1); rc=$?; set -e
+          [ "$rc" -eq 64 ] || fail "unknown verb rc $rc (want 64)"
+          set +e; out=$("$S" init ../evil 2>&1); rc=$?; set -e
+          [ "$rc" -eq 64 ] || fail "traversal name rc $rc (want 64)"
+          [ ! -e "$work/evil" ] || fail "traversal created a file"
+          # An unknown-but-safe instance name is also a usage error and must
+          # create nothing (the allowlist also covers `a/b` and `-rf`).
+          set +e; out=$("$S" init nosuchinstance 2>&1); rc=$?; set -e
+          [ "$rc" -eq 64 ] || fail "unknown instance rc $rc (want 64)"
+          [ ! -e "$work/xdg/nosuchinstance" ] || fail "unknown instance created a file"
+
+          "$S" init mimocode >/dev/null
+          f="$work/xdg/mimocode/env"
+          [ -f "$f" ] || fail "init did not create $f"
+          [ "$(stat -c '%a' "$f")" = "600" ] || fail "init mode $(stat -c '%a' "$f") (want 600)"
+          for v in ANTHROPIC_BASE_URL ANTHROPIC_AUTH_TOKEN ANTHROPIC_API_KEY; do
+            grep -q "$v" "$f" || fail "template omits $v"
+          done
+          # No uncommented line may exist: a template never carries a value.
+          if grep -vE '^[[:space:]]*(#|$)' "$f" | grep -q .; then
+            fail "template contains an uncommented line"
+          fi
+          # Positive control: the detector above does catch an export line.
+          printf 'export ANTHROPIC_BASE_URL=x\n' > "$work/control"
+          grep -vE '^[[:space:]]*(#|$)' "$work/control" | grep -q . \
+            || fail "uncommented-line detector broken"
+
+          cp "$f" "$work/before"
+          set +e; out=$("$S" init mimocode 2>&1); rc=$?; set -e
+          [ "$rc" -eq 73 ] || fail "clobber rc $rc (want 73)"
+          echo "$out" | grep -q 'refusing to overwrite' || fail "clobber message missing"
+          cmp -s "$f" "$work/before" || fail "init modified an existing file"
+
+          alt="$work/alt.env"
+          SHMULCODE_ENV_FILE="$alt" "$S" init mimocode >/dev/null
+          [ -f "$alt" ] || fail "SHMULCODE_ENV_FILE override not honoured"
+          [ "$(stat -c '%a' "$alt")" = "600" ] || fail "override mode not 600"
+          touch "$OUT"
+        '';
+
+        # ADMIN-02/03: doctor reports rule, path, stat fields and presence-only
+        # variables with a 0/78 exit; list covers every instance; neither ever
+        # prints a credential value (SEC-03 canary with a positive control).
+        admin-doctor-list = pkgs.runCommand "admin-doctor-list" {
+          nativeBuildInputs = [ pkgs.coreutils pkgs.gnugrep pkgs.diffutils ];
+        } ''
+          set -euo pipefail
+          OUT=$out
+          fail() { echo "FAIL: $*" >&2; exit 1; }
+          work="$TMPDIR/admin-doc"; mkdir -p "$work/xdg/mimocode"
+          export XDG_CONFIG_HOME="$work/xdg" HOME="$work"
+          S=${config.packages.shmulcode}/bin/shmulcode
+          CANARY='sk-CANARY-DO-NOT-PRINT'
+          printf 'x %s\n' "$CANARY" > "$work/control.txt"
+          grep -q "$CANARY" "$work/control.txt" || fail "canary detector broken"
+
+          set +e; out=$("$S" doctor mimocode 2>&1); rc=$?; set -e
+          [ "$rc" -eq 78 ] || fail "doctor missing rc $rc (want 78)"
+          echo "$out" | grep -q "$work/xdg/mimocode/env" || fail "doctor: path not printed"
+          echo "$out" | grep -q 'default path (XDG_CONFIG_HOME)' || fail "doctor: rule not printed"
+          echo "$out" | grep -q 'shmulcode init' || fail "doctor: init hint absent"
+
+          # No HOME and no XDG_CONFIG_HOME: doctor must fail closed with 78
+          # (same contract as the launcher), not guess a path.
+          set +e; out=$(env -i "$S" doctor mimocode 2>&1); rc=$?; set -e
+          [ "$rc" -eq 78 ] || fail "doctor no HOME/XDG rc $rc (want 78)"
+
+          # CRLF is rejected by doctor exactly like the launcher (78), never
+          # reported as usable.
+          printf 'ANTHROPIC_BASE_URL=https://example.test\r\nANTHROPIC_AUTH_TOKEN=x\r\n' > "$work/xdg/mimocode/env"
+          chmod 600 "$work/xdg/mimocode/env"
+          set +e; out=$("$S" doctor mimocode 2>&1); rc=$?; set -e
+          [ "$rc" -eq 78 ] || fail "doctor CRLF rc $rc (want 78)"
+          echo "$out" | grep -q 'CRLF' || fail "doctor: CRLF not named"
+
+          printf 'ANTHROPIC_BASE_URL=https://example.test\nANTHROPIC_AUTH_TOKEN=%s\n' "$CANARY" > "$work/xdg/mimocode/env"
+          chmod 600 "$work/xdg/mimocode/env"
+          set +e; out=$("$S" doctor mimocode 2>&1); rc=$?; set -e
+          [ "$rc" -eq 0 ] || fail "doctor usable rc $rc"
+          echo "$out" | grep -q 'mode: 600' || fail "doctor: mode not shown"
+          echo "$out" | grep -q 'ANTHROPIC_BASE_URL: set' || fail "doctor: base presence missing"
+          echo "$out" | grep -q 'ANTHROPIC_AUTH_TOKEN/ANTHROPIC_API_KEY: set' || fail "doctor: credential presence missing"
+          echo "$out" | grep -q 'claude doctor' || fail "doctor: claude doctor hint missing"
+          if echo "$out" | grep -q "$CANARY"; then fail "doctor leaked canary"; fi
+
+          printf 'ANTHROPIC_AUTH_TOKEN=%s\n' "$CANARY" > "$work/xdg/mimocode/env"
+          chmod 600 "$work/xdg/mimocode/env"
+          set +e; out=$("$S" doctor mimocode 2>&1); rc=$?; set -e
+          [ "$rc" -eq 78 ] || fail "doctor partial rc $rc (want 78)"
+          echo "$out" | grep -q 'missing required variables: ANTHROPIC_BASE_URL' || fail "doctor: missing var not named"
+          if echo "$out" | grep -q "$CANARY"; then fail "doctor partial leaked canary"; fi
+
+          printf 'ANTHROPIC_BASE_URL=https://example.test\nANTHROPIC_AUTH_TOKEN=%s\n' "$CANARY" > "$work/xdg/mimocode/env"
+          chmod 644 "$work/xdg/mimocode/env"
+          set +e; out=$("$S" doctor mimocode 2>&1); rc=$?; set -e
+          [ "$rc" -eq 0 ] || fail "doctor 644 rc $rc (warning must be non-blocking)"
+          echo "$out" | grep -q 'group/world-accessible' || fail "doctor: 644 not flagged"
+          if echo "$out" | grep -q "$CANARY"; then fail "doctor 644 leaked canary"; fi
+          chmod 600 "$work/xdg/mimocode/env"
+
+          "$S" doctor mimocode > "$work/d.txt" 2>&1 || fail "doctor failed for diff"
+          "$S" info mimocode > "$work/i.txt" 2>&1 || fail "info failed for diff"
+          diff -u "$work/d.txt" "$work/i.txt" || fail "info output differs from doctor"
+
+          alt="$work/alt.env"; cp "$work/xdg/mimocode/env" "$alt"; chmod 600 "$alt"
+          set +e; out=$(SHMULCODE_ENV_FILE="$alt" "$S" doctor mimocode 2>&1); rc=$?; set -e
+          [ "$rc" -eq 0 ] || fail "doctor override rc $rc"
+          echo "$out" | grep -q 'SHMULCODE_ENV_FILE override' || fail "doctor: override rule not shown"
+
+          set +e; out=$("$S" list 2>&1); rc=$?; set -e
+          [ "$rc" -eq 0 ] || fail "list rc $rc"
+          for n in ${lib.concatStringsSep " " (builtins.attrNames instances)}; do
+            cnt=$(echo "$out" | grep -c "^$n — " || true)
+            [ "$cnt" -eq 1 ] || fail "list: $n appears $cnt times (want exactly 1)"
+          done
+          echo "$out" | grep -q '(present' || fail "list: no present state"
+          echo "$out" | grep -q '(missing' || fail "list: no missing state"
+          if echo "$out" | grep -q "$CANARY"; then fail "list leaked canary"; fi
+          touch "$OUT"
+        '';
+
+        # ADMIN-03: SHMULCODE_DEBUG=1 makes the launcher print rule/path/mode
+        # to stderr before sourcing, and never a value. Unset means silence.
+        admin-debug = pkgs.runCommand "admin-debug" {
+          nativeBuildInputs = [ pkgs.coreutils pkgs.gnugrep ];
+        } ''
+          set -euo pipefail
+          OUT=$out
+          fail() { echo "FAIL: $*" >&2; exit 1; }
+          work="$TMPDIR/admin-debug"; mkdir -p "$work/xdg/testcode"
+          export XDG_CONFIG_HOME="$work/xdg" HOME="$work"
+          CANARY='sk-CANARY-DO-NOT-PRINT'
+          printf 'ANTHROPIC_BASE_URL=https://example.test\nANTHROPIC_AUTH_TOKEN=%s\n' "$CANARY" > "$work/xdg/testcode/env"
+          chmod 600 "$work/xdg/testcode/env"
+          W=${defaultWrapper}/bin/testcode
+          printf 'x %s\n' "$CANARY" > "$work/control.txt"
+          grep -q "$CANARY" "$work/control.txt" || fail "canary detector broken"
+
+          set +e; err=$(SHMULCODE_DEBUG=1 STUB_EXIT=0 "$W" 2>&1 >/dev/null); rc=$?; set -e
+          [ "$rc" -eq 0 ] || fail "debug run rc $rc"
+          echo "$err" | grep -q 'debug: resolved' || fail "debug trace missing"
+          echo "$err" | grep -q "$work/xdg/testcode/env" || fail "debug trace path missing"
+          echo "$err" | grep -q 'mode 600' || fail "debug trace mode missing"
+          if echo "$err" | grep -q "$CANARY"; then fail "debug trace leaked canary"; fi
+
+          set +e; err=$(STUB_EXIT=0 "$W" 2>&1 >/dev/null); set -e
+          if echo "$err" | grep -q 'debug: resolved'; then fail "debug trace emitted without SHMULCODE_DEBUG"; fi
           touch "$OUT"
         '';
 
