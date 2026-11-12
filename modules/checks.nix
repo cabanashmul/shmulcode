@@ -1,7 +1,8 @@
 { ... }:
 {
-  perSystem = { pkgs, ... }:
+  perSystem = { pkgs, lib, config, ... }:
     let
+      instances = import ./_instances.nix;
       mkLauncher = import ../lib/mk-launcher.nix;
 
       # name = "claude" gives $out/bin/claude and meta.mainProgram = "claude",
@@ -42,6 +43,28 @@
         # never downloads the real 100MB+ binary.
         claude-code-unfree-eval =
           builtins.seq pkgs.claude-code.drvPath (pkgs.writeText "claude-code-eval-ok" "ok");
+
+        # DIST-01/DIST-02 + INST-01..03: assert the real package/app surface at
+        # evaluation time only. builtins.seq forces instantiation (a broken
+        # attribute fails) but never builds, so claude-code stays out of this
+        # check's build closure.
+        packages-surface =
+          let
+            names = builtins.attrNames instances;          # already sorted
+            expectedPackages = builtins.sort builtins.lessThan (names ++ [ "default" ]);
+          in
+          builtins.seq config.packages.default.drvPath (
+            assert builtins.all (n: builtins.elem n names) [ "mimocode" "deepcode" "grokcode" ];
+            assert builtins.attrNames config.packages == expectedPackages;
+            assert builtins.attrNames config.apps == names;
+            assert builtins.all (n: config.packages.${n}.meta.mainProgram == n) names;
+            assert config.packages.default.name == "shmulcode";
+            assert map (d: d.name) config.packages.default.launchers == names;
+            assert !(builtins.elem "claude" (map (d: d.name) config.packages.default.launchers));
+            assert builtins.all (n: config.apps.${n}.type == "app") names;
+            assert builtins.all (n: config.apps.${n}.program == lib.getExe config.packages.${n}) names;
+            pkgs.writeText "packages-surface-ok" "ok"
+          );
 
         launcher-contract = pkgs.runCommand "launcher-contract" {
           nativeBuildInputs = [ pkgs.coreutils pkgs.gnugrep ];
@@ -257,7 +280,7 @@
             grep -qE "$pattern" "$TMPDIR/bad.nix" \
               || { echo "SEC-01 FAIL: lint regex misses: $bad" >&2; exit 1; }
           done
-          if grep -rnE "$pattern" ${../lib} ${./pkgs.nix} ${../flake.nix}; then
+          if grep -rnE "$pattern" ${../lib} ${./pkgs.nix} ${./packages.nix} ${./_instances.nix} ${../flake.nix}; then
             echo "SEC-01 FAIL: eval-time secret access found above" >&2
             exit 1
           fi
