@@ -1,6 +1,9 @@
-{ ... }:
+{ inputs, config, ... }:
 {
-  perSystem = { pkgs, lib, config, ... }:
+  # Per-system module args are bound as `ps` so the top-level `config`
+  # (flake-parts' flake config, which owns `systems`) is not shadowed and stays
+  # in scope for the Home Manager fixtures below.
+  perSystem = { pkgs, lib, ... }@ps:
     let
       instances = import ./_instances.nix;
       mkLauncher = import ../lib/mk-launcher.nix;
@@ -47,7 +50,7 @@
       # it adds nothing to the build closure.
       stubBundle = pkgs.symlinkJoin {
         name = "shmulcode";
-        paths = builtins.attrValues stubLaunchers ++ [ config.packages.shmulcode ];
+        paths = builtins.attrValues stubLaunchers ++ [ ps.config.packages.shmulcode ];
       };
 
       name = "testcode";
@@ -66,6 +69,169 @@
       # Baked path whose parent root is supplied at run time, so the check can
       # create the target with mode 000 and prove the "unreadable" branch.
       bakedUnreadable = mk { inherit name; envFile = "\${UNREADABLE_ROOT}/unreadable.env"; };
+
+      # ---- Phase 5: Home Manager module -----------------------------------
+      hmModule = import ../lib/hm-module.nix {
+        inherit (inputs) nixpkgs;
+        supportedSystems = config.systems;  # derived from flake.nix; do not hardcode
+      };
+
+      # A stub named `claude` keeps the real unfree closure out of nix flake check.
+      hmStub = pkgs.writeShellApplication {
+        name = "claude";
+        text = ''
+          echo "STUB-ARGV: $*"
+          exit 0
+        '';
+      };
+
+      hmBase = {
+        home.username = "shmulcode-hm-test";
+        home.homeDirectory = "/home/shmulcode-hm-test";
+        home.stateVersion = "26.11";
+        programs.man.enable = false;      # drop man-db
+        xdg.mime.enable = false;          # drop shared-mime-info
+        manual.manpages.enable = false;   # drop the reference manpage
+      };
+
+      mkHome = extraModules: inputs.home-manager.lib.homeManagerConfiguration {
+        inherit pkgs;
+        modules = [ hmBase hmModule ] ++ extraModules;
+      };
+
+      # Success canary: one baked instance plus one renamed, runtime-resolution
+      # instance (the latter exercises envName in the XDG/HOME path and the hint).
+      hmGood = mkHome [{
+        programs.shmulcode.instances = {
+          mimocode = {
+            enable = true;
+            envFile = "/run/agenix/mimocode-env";
+            package = hmStub;
+          };
+          grokcode = {
+            enable = true;
+            command = "grok";
+            envFile = null;
+            package = hmStub;
+          };
+        };
+      }];
+
+      # No user instance definitions: the attrs default gives three disabled
+      # built-ins, so no launcher may appear.
+      hmZero = mkHome [ { } ];
+
+      # Defining only envFile must NOT enable the instance (explicit enable).
+      hmDisabledOnly = mkHome [{
+        programs.shmulcode.instances.deepcode.envFile = "/run/agenix/deepcode-env";
+      }];
+
+      # Failure probes, one per assertion.
+      hmStore = mkHome [{
+        programs.shmulcode.instances.mimocode = {
+          enable = true;
+          envFile = "/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-env";
+          package = hmStub;
+        };
+      }];
+
+      hmEmpty = mkHome [{
+        programs.shmulcode.instances.mimocode = {
+          enable = true;
+          envFile = "";
+          package = hmStub;
+        };
+      }];
+
+      hmBadCommand = mkHome [{
+        programs.shmulcode.instances.mimocode = {
+          enable = true;
+          command = "mimo; touch /tmp/pwned";
+          envFile = "/run/agenix/mimocode-env";
+          package = hmStub;
+        };
+      }];
+
+      hmBadVars = mkHome [{
+        programs.shmulcode.instances.mimocode = {
+          enable = true;
+          envFile = "/run/agenix/mimocode-env";
+          requiredVars = [ "ANTHROPIC_BASE_URL; touch /tmp/pwned" ];
+          package = hmStub;
+        };
+      }];
+
+      hmBadPath = mkHome [{
+        programs.shmulcode.instances.mimocode = {
+          enable = true;
+          envFile = "/run/agenix/mimo code\"$(touch /tmp/pwned)";
+          package = hmStub;
+        };
+      }];
+
+      hmDup = mkHome [{
+        programs.shmulcode.instances = {
+          mimocode = { enable = true; command = "same"; envFile = "/run/agenix/a"; package = hmStub; };
+          deepcode = { enable = true; command = "same"; envFile = "/run/agenix/b"; package = hmStub; };
+        };
+      }];
+
+      hmReserved = mkHome [{
+        programs.shmulcode.instances.mimocode = {
+          enable = true;
+          command = "claude";
+          envFile = "/run/agenix/a";
+          package = hmStub;
+        };
+      }];
+
+      # Mechanism-agnostic canary: a fake agenix-shaped option, no agenix import.
+      hmAgenix = mkHome [
+        ({ lib, ... }: {
+          options.age.secrets = lib.mkOption {
+            type = lib.types.attrsOf (lib.types.submodule {
+              options.path = lib.mkOption { type = lib.types.str; };
+            });
+            default = { };
+          };
+        })
+        ({ config, ... }: {
+          config.age.secrets."mimocode-env".path = "/run/agenix/mimocode-env";
+          config.programs.shmulcode.instances.mimocode = {
+            enable = true;
+            envFile = config.age.secrets."mimocode-env".path;
+            package = hmStub;
+          };
+        })
+      ];
+
+      # tryEval catches HM's assertion throw; use drvPath to force config + assertions.
+      hmTry = x: (builtins.tryEval (builtins.deepSeq x x)).success;
+      hmPackageNames = h: map (p: p.name) h.config.home.packages;
+
+      hmResults = {
+        goodActivates = hmTry hmGood.activationPackage.drvPath;
+        goodPackages = hmPackageNames hmGood;
+        zeroHasNoLaunchers = !(builtins.any
+          (n: builtins.elem n (hmPackageNames hmZero))
+          [ "mimocode" "deepcode" "grokcode" "grok" ]);
+        # HMOD-07 (the "built-ins are available" half): a config that enables
+        # nothing must still SEE the three built-in instances as declared
+        # options. Without this, an empty `instances` default would pass
+        # zeroHasNoLaunchers vacuously.
+        builtinsAreDeclared =
+          builtins.attrNames hmZero.config.programs.shmulcode.instances
+            == [ "deepcode" "grokcode" "mimocode" ];
+        disabledOnlyHasNoLaunchers = !(builtins.elem "deepcode" (hmPackageNames hmDisabledOnly));
+        storeFails = !(hmTry hmStore.activationPackage.drvPath);
+        emptyFails = !(hmTry hmEmpty.activationPackage.drvPath);
+        badCommandFails = !(hmTry hmBadCommand.activationPackage.drvPath);
+        badVarsFails = !(hmTry hmBadVars.activationPackage.drvPath);
+        badPathFails = !(hmTry hmBadPath.activationPackage.drvPath);
+        duplicateCommandsFail = !(hmTry hmDup.activationPackage.drvPath);
+        reservedCommandFails = !(hmTry hmReserved.activationPackage.drvPath);
+        agenixRefEvaluates = hmTry hmAgenix.activationPackage.drvPath;
+      };
     in
     {
       checks = {
@@ -83,25 +249,25 @@
             names = builtins.attrNames instances;          # already sorted
             expectedPackages = builtins.sort builtins.lessThan (names ++ [ "default" "shmulcode" ]);
           in
-          builtins.seq config.packages.default.drvPath (
+          builtins.seq ps.config.packages.default.drvPath (
             assert builtins.all (n: builtins.elem n names) [ "mimocode" "deepcode" "grokcode" ];
-            assert builtins.attrNames config.packages == expectedPackages;
-            assert builtins.attrNames config.apps == names;
-            assert builtins.all (n: config.packages.${n}.meta.mainProgram == n) names;
-            assert config.packages.shmulcode.meta.mainProgram == "shmulcode";
-            assert config.packages.default.name == "shmulcode";
+            assert builtins.attrNames ps.config.packages == expectedPackages;
+            assert builtins.attrNames ps.config.apps == names;
+            assert builtins.all (n: ps.config.packages.${n}.meta.mainProgram == n) names;
+            assert ps.config.packages.shmulcode.meta.mainProgram == "shmulcode";
+            assert ps.config.packages.default.name == "shmulcode";
             # passthru.launchers keeps its Phase 3 meaning: launchers only.
-            assert map (d: d.name) config.packages.default.launchers == names;
-            assert !(builtins.elem "claude" (map (d: d.name) config.packages.default.launchers));
+            assert map (d: d.name) ps.config.packages.default.launchers == names;
+            assert !(builtins.elem "claude" (map (d: d.name) ps.config.packages.default.launchers));
             # ADMIN: the bundle joins the launchers AND the admin command.
-            assert config.packages.default.admin == config.packages.shmulcode;
+            assert ps.config.packages.default.admin == ps.config.packages.shmulcode;
             # WR-01 (extended): compare by store path so a regression to a
             # launcher-only bundle fails here even if passthru stays correct.
-            assert map toString config.packages.default.paths
-              == map toString (config.packages.default.launchers ++ [ config.packages.default.admin ]);
-            assert builtins.length config.packages.default.paths == builtins.length names + 1;
-            assert builtins.all (n: config.apps.${n}.type == "app") names;
-            assert builtins.all (n: config.apps.${n}.program == lib.getExe config.packages.${n}) names;
+            assert map toString ps.config.packages.default.paths
+              == map toString (ps.config.packages.default.launchers ++ [ ps.config.packages.default.admin ]);
+            assert builtins.length ps.config.packages.default.paths == builtins.length names + 1;
+            assert builtins.all (n: ps.config.apps.${n}.type == "app") names;
+            assert builtins.all (n: ps.config.apps.${n}.program == lib.getExe ps.config.packages.${n}) names;
             pkgs.writeText "packages-surface-ok" "ok"
           );
 
@@ -164,7 +330,7 @@
 
         # DIST-03 + ADMIN-03 bundling: the default bundle is exactly one bin per
         # instance plus `shmulcode`, and never `claude`. Uses stubBundle, never
-        # config.packages.default, so this check does not pull claude-code in.
+        # ps.config.packages.default, so this check does not pull claude-code in.
         bundle-layout = pkgs.runCommand "bundle-layout" {
           nativeBuildInputs = [ pkgs.coreutils pkgs.gnugrep ];
         } ''
@@ -198,7 +364,7 @@
           fail() { echo "FAIL: $*" >&2; exit 1; }
           work="$TMPDIR/admin-init"; mkdir -p "$work/xdg"
           export XDG_CONFIG_HOME="$work/xdg" HOME="$work"
-          S=${config.packages.shmulcode}/bin/shmulcode
+          S=${ps.config.packages.shmulcode}/bin/shmulcode
 
           set +e; out=$("$S" 2>&1); rc=$?; set -e
           [ "$rc" -eq 64 ] || fail "no-arg rc $rc (want 64)"
@@ -254,7 +420,7 @@
           fail() { echo "FAIL: $*" >&2; exit 1; }
           work="$TMPDIR/admin-doc"; mkdir -p "$work/xdg/mimocode"
           export XDG_CONFIG_HOME="$work/xdg" HOME="$work"
-          S=${config.packages.shmulcode}/bin/shmulcode
+          S=${ps.config.packages.shmulcode}/bin/shmulcode
           CANARY='sk-CANARY-DO-NOT-PRINT'
           printf 'x %s\n' "$CANARY" > "$work/control.txt"
           grep -q "$CANARY" "$work/control.txt" || fail "canary detector broken"
@@ -593,6 +759,32 @@
 
           touch "$OUT"
         '';
+
+        # HMOD-01..05/07 (eval): option schema, store-prefix and charset guards,
+        # mechanism agnosticism, explicit enable, and command rename. Every
+        # must-fail probe is paired with a must-succeed canary; the result JSON
+        # is written only when every probe has the expected outcome.
+        hm-module-results =
+          let
+            r = hmResults;
+            ok =
+              r.goodActivates
+              && builtins.elem "mimocode" r.goodPackages
+              && builtins.elem "grok" r.goodPackages
+              && r.builtinsAreDeclared && r.zeroHasNoLaunchers
+              && r.disabledOnlyHasNoLaunchers
+              && r.storeFails
+              && r.emptyFails
+              && r.badCommandFails
+              && r.badVarsFails
+              && r.badPathFails
+              && r.duplicateCommandsFail
+              && r.reservedCommandFails
+              && r.agenixRefEvaluates;
+          in
+          if ok
+          then pkgs.writeText "hm-module-results" (builtins.toJSON r)
+          else throw "hm-module-results: unexpected outcome: ${builtins.toJSON r}";
 
         # SEC-01: no eval-time secret access anywhere in the flake's Nix source.
         # modules/checks.nix is excluded on purpose: it holds this pattern
