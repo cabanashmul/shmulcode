@@ -786,6 +786,45 @@
           then pkgs.writeText "hm-module-results" (builtins.toJSON r)
           else throw "hm-module-results: unexpected outcome: ${builtins.toJSON r}";
 
+        # HMOD-03/05/06 (build): build a REAL Home Manager activation package
+        # with the module and a stub claude, then assert the baked path reached
+        # the generated script, the baked branch has no fallback, and the
+        # renamed instance kept the instance-name path/hint.
+        hm-module-activation = pkgs.runCommand "hm-module-activation" {
+          nativeBuildInputs = [ pkgs.coreutils pkgs.gnugrep ];
+        } ''
+          set -euo pipefail
+          OUT=$out
+          fail() { echo "FAIL: $*" >&2; exit 1; }
+          G=${hmGood.activationPackage}
+
+          # Baked instance: path present, no runtime fallback branches.
+          W="$G/home-path/bin/mimocode"
+          test -x "$W" || fail "activation lacks home-path/bin/mimocode"
+          grep -qE 'exec /nix/store/[^ "]+/bin/claude' "$W" || fail "wrapper does not exec an absolute claude path"
+          if grep -qE 'exec /nix/store/[^ "]+claude-code[^ "]*/bin/claude' "$W"; then
+            fail "wrapper execs the real claude-code package, not the stub"
+          fi
+          grep -qF 'env_file="/run/agenix/mimocode-env"' "$W" || fail "baked env path missing from wrapper"
+          grep -qF 'origin="baked path"' "$W" || fail "baked origin label missing from wrapper"
+          if grep -qF 'XDG_CONFIG_HOME' "$W"; then fail "baked wrapper contains an XDG fallback"; fi
+          if grep -qF 'HOME/.config' "$W"; then fail "baked wrapper contains a HOME fallback"; fi
+
+          # Renamed runtime-resolution instance: envName keeps the instance name.
+          R="$G/home-path/bin/grok"
+          test -x "$R" || fail "activation lacks the renamed home-path/bin/grok"
+          if test -e "$G/home-path/bin/grokcode"; then fail "rename left a grokcode binary"; fi
+          if test -e "$G/home-path/bin/claude"; then fail "bare claude was installed into home.packages"; fi
+          grep -qF 'XDG_CONFIG_HOME' "$R" || fail "positive control: runtime wrapper lacks XDG branch"
+          grep -qF '.config/grokcode/env' "$R" || fail "renamed wrapper path segment is not the instance name"
+          grep -qF 'shmulcode init grokcode' "$R" || fail "renamed wrapper init hint is not the instance name"
+          if grep -qF '.config/grok/env' "$R"; then
+            fail "renamed wrapper path followed command instead of the instance name"
+          fi
+
+          touch "$OUT"
+        '';
+
         # SEC-01: no eval-time secret access anywhere in the flake's Nix source.
         # modules/checks.nix is excluded on purpose: it holds this pattern
         # literal and would match its own source.
