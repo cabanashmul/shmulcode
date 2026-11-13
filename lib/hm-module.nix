@@ -166,9 +166,9 @@ in
       {
         # WR-02: check for a store path ANYWHERE in the string, not just as a
         # prefix (`//nix/store/...` and mid-string paths previously slipped by).
-        # Belt-and-braces: a path literal like `./secrets/env` is already copied
-        # into the store by Nix before this runs — this only catches store
-        # strings, so never pass a path literal.
+        # Belt-and-braces: a Nix path literal is already copied into the store
+        # before this runs — this only catches store-path strings, so always
+        # pass a string path, never a path literal.
         assertion = builtins.all
           (i: i.envFile == null || !(lib.hasInfix "/nix/store/" i.envFile))
           instanceValues;
@@ -215,7 +215,7 @@ in
         assertion = builtins.all
           (i: i.envFile == null || pathSafe i.envFile)
           instanceValues;
-        message = "programs.shmulcode: envFile may contain only [A-Za-z0-9_./+~{}$:@-]; no spaces, quotes, or command substitution";
+        message = "programs.shmulcode: envFile may contain only [A-Za-z0-9_./+{}$:@-]; no spaces, quotes, command substitution, or ~ (a tilde is never expanded in the baked path)";
       }
       {
         assertion =
