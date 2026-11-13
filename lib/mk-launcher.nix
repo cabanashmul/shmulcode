@@ -12,6 +12,7 @@
 # do not pass a path containing shell command substitution.
 { pkgs
 , name
+, envName ? name      # Resolution label; defaults to name so bare packages are unchanged.
 , description ? "${name} — Claude Code against a provider env file"
 , envFile ? null                     # path STRING or null; never a Nix path
 , requiredVars ? [ "ANTHROPIC_BASE_URL" [ "ANTHROPIC_AUTH_TOKEN" "ANTHROPIC_API_KEY" ] ]
@@ -33,8 +34,8 @@ let
   resolution = resolver.mkResolution {
     # Bare tokens: the template supplies the surrounding double quotes.
     # Passing "\"${name}\"" here renders `echo ""name": …` → SC2140 build failure.
-    nameExpr = name;
-    errorLabel = name;
+    nameExpr = envName;
+    errorLabel = envName;
     baked = if envFile == null then null else envFile;
   };
 in
@@ -59,7 +60,7 @@ pkgs.writeShellApplication {
     if [ ! -f "$env_file" ]; then
       echo "${name}: environment file not found ($origin): $env_file" >&2
       echo "${name}: expected variables: ${lib.concatStringsSep " " requiredLabels}" >&2
-      echo "${name}: run 'shmulcode init ${name}' to create it" >&2
+      echo "${name}: run 'shmulcode init ${envName}' to create it" >&2
       exit 78
     fi
     if [ ! -r "$env_file" ]; then
