@@ -74,6 +74,7 @@
       hmModule = import ../lib/hm-module.nix {
         inherit (inputs) nixpkgs;
         supportedSystems = config.systems;  # derived from flake.nix; do not hardcode
+        shmulcodePackages = inputs.self.packages;
       };
 
       # A stub named `claude` keeps the real unfree closure out of nix flake check.
@@ -867,6 +868,16 @@
           if grep -qF '.config/grok/env' "$R"; then
             fail "renamed wrapper path followed command instead of the instance name"
           fi
+
+          # The admin command must be installed alongside the launchers, so a
+          # consumer can actually run `shmulcode init/doctor/list` (the runbook
+          # tells them to). Baked instances must NOT advertise init — it cannot
+          # create their path.
+          test -x "$G/home-path/bin/shmulcode" || fail "activation lacks home-path/bin/shmulcode (admin command)"
+          if grep -qF "run 'shmulcode init mimocode'" "$W"; then
+            fail "baked wrapper suggests 'shmulcode init', which cannot create a Home Manager path"
+          fi
+          grep -qF 'configured by your Home Manager module' "$W" || fail "baked wrapper hint is not Home-Manager-aware"
 
           touch "$OUT"
         '';

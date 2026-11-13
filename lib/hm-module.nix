@@ -13,6 +13,7 @@
 # no value ever crosses into the store or a derivation.
 { nixpkgs
 , supportedSystems ? [ "x86_64-linux" "aarch64-linux" ]
+, shmulcodePackages ? { }   # system -> packages attrset (for the admin command)
 }:
 { config, lib, pkgs, ... }:
 let
@@ -22,6 +23,10 @@ let
 
   cfg = config.programs.shmulcode;
   system = pkgs.stdenv.hostPlatform.system;
+
+  # The flake-built admin command for this system, if the factory supplied the
+  # packages. It cannot see consumer-baked paths — see `installAdminCommand`.
+  adminPackage = shmulcodePackages.${system}.shmulcode or null;
 
   # Flake-pinned claude: the only unfree allowance, exactly as in modules/pkgs.nix.
   flakePkgs =
@@ -76,6 +81,18 @@ in
       description = ''
         Master switch for the shmulcode Home Manager module. It is inert until
         at least one `programs.shmulcode.instances.<name>.enable` is true.
+      '';
+    };
+
+    installAdminCommand = lib.mkOption {
+      type = lib.types.bool;
+      default = true;
+      description = ''
+        Install the `shmulcode` admin command (`init`/`doctor`/`list`) alongside
+        the launchers. It is the flake-built command, so it can see built-in
+        instances and runtime-resolved (XDG/HOME) env files — but NOT a
+        consumer's build-time baked paths. Use `SHMULCODE_DEBUG=1 <launcher>`
+        to inspect a baked instance's resolution.
       '';
     };
 
@@ -160,7 +177,8 @@ in
   };
 
   config = lib.mkIf cfg.enable {
-    home.packages = builtins.attrValues launchers;
+    home.packages = builtins.attrValues launchers
+      ++ lib.optional (cfg.installAdminCommand && adminPackage != null) adminPackage;
 
     assertions = [
       {

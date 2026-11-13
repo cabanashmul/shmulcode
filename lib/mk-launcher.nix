@@ -60,7 +60,13 @@ pkgs.writeShellApplication {
     if [ ! -f "$env_file" ]; then
       echo "${name}: environment file not found ($origin): $env_file" >&2
       echo "${name}: expected variables: ${lib.concatStringsSep " " requiredLabels}" >&2
-      echo "${name}: run 'shmulcode init ${envName}' to create it" >&2
+      ${if envFile == null then ''
+        echo "${name}: run 'shmulcode init ${envName}' to create it" >&2
+      '' else ''
+        # A baked path (Home Manager) comes from the consumer's secret tool;
+        # `shmulcode init` cannot create it, so do not suggest that.
+        echo "${name}: this path is configured by your Home Manager module; check that the secret exists" >&2
+      ''}
       exit 78
     fi
     if [ ! -r "$env_file" ]; then

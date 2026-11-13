@@ -13,6 +13,10 @@ let
   hmModule = import ../lib/hm-module.nix {
     inherit (inputs) nixpkgs;
     supportedSystems = config.systems;
+    # Lets the module install the `shmulcode` admin command for consumers.
+    # It is the flake-built command: it sees built-ins and runtime-resolved
+    # paths, not a consumer's build-time baked paths (use SHMULCODE_DEBUG).
+    shmulcodePackages = inputs.self.packages;
   };
 in
 {

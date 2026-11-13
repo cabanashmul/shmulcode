@@ -124,9 +124,10 @@ SHMULCODE_DEBUG=1 mimocode  # print the resolution trace before launching
 
 ## Caveats
 
-- **`nix run …#default` does not work.** `packages.default` is a `symlinkJoin`
-  with no `meta.mainProgram`; always name an instance (`#mimocode`), or use
-  `nix profile install`.
+- **`nix run …#default` does not launch a provider.** `packages.default` is a
+  `symlinkJoin`, so Nix falls back to the bundle's name and runs the `shmulcode`
+  admin command (which exits 64 with usage). Always name an instance
+  (`#mimocode`), or use `nix profile install`.
 - **First build is slow.** The unfree `claude-code` binary is a large download and
   is often not on the public cache; subsequent runs are cached.
 - **Provider settings live in the env file**, not the flake — URL, model ids, and

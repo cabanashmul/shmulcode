@@ -76,14 +76,25 @@ absolute store path.
 ### 4. Verify (MIGR-04)
 
 ```bash
-shmulcode list                  # three instances, env paths, present
-shmulcode doctor mimocode       # resolution trace = baked path
+# The module installs the admin command alongside the launchers.
+shmulcode list                  # three instances, resolved env paths, present
+
+# To see a BAKED instance's resolution, use the launcher's own debug trace:
+SHMULCODE_DEBUG=1 mimocode --version
+#   → "mimocode: debug: resolved (baked path): /run/agenix/mimocode-env (mode 600)"
+
 mimocode --version              # reaches the real claude binary
 mimocode                        # TUI opens; Ctrl-C returns cleanly to the prompt
 ```
 
-`doctor` should report `origin: baked path` for all three — that proves the HM
-module's build-time path is in effect and the XDG fallback is not being used.
+> **Why not `shmulcode doctor`?** The `shmulcode` command is built by the flake
+> from static instance data; it cannot see a consumer's build-time baked paths.
+> It reports `default path (XDG_CONFIG_HOME)` for built-ins regardless of what
+> the Home Manager module baked. `SHMULCODE_DEBUG=1 <launcher>` is the truthful
+> view for baked instances, because it runs the actual wrapper.
+
+Expected: the debug line names `/run/agenix/<name>-env` with `(baked path)` — that
+proves the module's build-time path is in effect and XDG is not being used.
 
 ## Rolling back
 

@@ -12,7 +12,7 @@ A Nix flake that packages provider-multiplexed Claude Code launchers. One parame
 - **Tech stack:** Nix flakes; `claude-code` from the flake's pinned nixpkgs.
 - **Security:** provider secrets never appear in the flake, store, or derivation inputs — only paths are referenced; env files are sourced at runtime. Module-baked paths point at the consumer's decrypted secret.
 - **Compatibility:** module must not assume agenix; any file-providing secret mechanism works.
-- **Distribution:** public flake, consumable via `nix run github:cabanashmul/shmulcode#<instance>` with no local config.
+- **Distribution:** public flake, consumable via `nix run github:shmul95/shmulcode#<instance>` with no local config.
 - **Breaking changes:** acceptable — no third-party users yet (owner on multiple machines).
 <!-- GSD:project-end -->
 
