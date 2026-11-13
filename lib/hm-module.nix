@@ -43,7 +43,9 @@ let
   # BEFORE it reaches mkLauncher (Pitfall 9).
   nameSafe = n: builtins.match "[A-Za-z0-9][A-Za-z0-9._-]*" n != null;
   varSafe = v: builtins.match "[A-Za-z_][A-Za-z0-9_]*" v != null;
-  pathSafe = p: builtins.match "[A-Za-z0-9_./+~{}$:@-]+" p != null;
+  # WR-03: no `~` — the baked value is double-quoted, so tilde never expands
+  # and the wrapper would exit 78 with a confusing path.
+  pathSafe = p: builtins.match "[A-Za-z0-9_./+{}$:@-]+" p != null;
   flatVars = vs: lib.concatMap (v: if builtins.isList v then v else [ v ]) vs;
 
   instanceNames = builtins.attrNames cfg.instances;
@@ -162,10 +164,34 @@ in
 
     assertions = [
       {
+        # WR-02: check for a store path ANYWHERE in the string, not just as a
+        # prefix (`//nix/store/...` and mid-string paths previously slipped by).
+        # Belt-and-braces: a path literal like `./secrets/env` is already copied
+        # into the store by Nix before this runs — this only catches store
+        # strings, so never pass a path literal.
         assertion = builtins.all
-          (i: i.envFile == null || !(lib.hasPrefix "/nix/store/" i.envFile))
+          (i: i.envFile == null || !(lib.hasInfix "/nix/store/" i.envFile))
           instanceValues;
-        message = "programs.shmulcode: envFile must not be a /nix/store path — that copies a secret into the world-readable store; pass the runtime path (e.g. config.age.secrets.<n>.path) instead";
+        message = "programs.shmulcode: envFile must not reference /nix/store — that is a copy of a secret in the world-readable store; pass the runtime path (e.g. config.age.secrets.<n>.path) instead";
+      }
+      {
+        # WR-01: extraEnv is baked into the world-readable store, so it must
+        # never carry a credential. Reject obviously secret-bearing keys.
+        assertion = builtins.all
+          (i: builtins.all
+            (k: builtins.match ".*(KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL).*" (lib.toUpper k) == null)
+            (builtins.attrNames i.extraEnv))
+          instanceValues;
+        message = "programs.shmulcode: extraEnv is baked into the Nix store and must not hold credentials — remove any *KEY*/*TOKEN*/*SECRET*/*PASSWORD* entry and put it in the env file instead";
+      }
+      {
+        # WR-04: an empty any-of group renders invalid bash (`if ; then`).
+        assertion = builtins.all
+          (i: builtins.all
+            (g: !(builtins.isList g) || builtins.length g > 0)
+            i.requiredVars)
+          instanceValues;
+        message = "programs.shmulcode: requiredVars any-of groups must not be empty lists";
       }
       {
         assertion = builtins.all

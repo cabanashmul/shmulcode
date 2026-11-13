@@ -143,6 +143,44 @@
         };
       }];
 
+      # WR-02: a non-prefix form of a store path must also be rejected.
+      hmStoreInfix = mkHome [{
+        programs.shmulcode.instances.mimocode = {
+          enable = true;
+          envFile = "//nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-env";
+          package = hmStub;
+        };
+      }];
+
+      # WR-01: a credential in extraEnv would be baked into the store.
+      hmSecretExtraEnv = mkHome [{
+        programs.shmulcode.instances.mimocode = {
+          enable = true;
+          envFile = "/run/agenix/mimocode-env";
+          package = hmStub;
+          extraEnv.ANTHROPIC_API_KEY = "sk-should-never-be-baked";
+        };
+      }];
+
+      # WR-03: a tilde never expands in the double-quoted baked path.
+      hmTildePath = mkHome [{
+        programs.shmulcode.instances.mimocode = {
+          enable = true;
+          envFile = "~/secrets/mimocode.env";
+          package = hmStub;
+        };
+      }];
+
+      # WR-04: an empty any-of group renders invalid bash.
+      hmEmptyVarGroup = mkHome [{
+        programs.shmulcode.instances.mimocode = {
+          enable = true;
+          envFile = "/run/agenix/mimocode-env";
+          package = hmStub;
+          requiredVars = [ [ ] ];
+        };
+      }];
+
       hmBadCommand = mkHome [{
         programs.shmulcode.instances.mimocode = {
           enable = true;
@@ -224,6 +262,10 @@
             == [ "deepcode" "grokcode" "mimocode" ];
         disabledOnlyHasNoLaunchers = !(builtins.elem "deepcode" (hmPackageNames hmDisabledOnly));
         storeFails = !(hmTry hmStore.activationPackage.drvPath);
+        storeInfixFails = !(hmTry hmStoreInfix.activationPackage.drvPath);
+        secretExtraEnvFails = !(hmTry hmSecretExtraEnv.activationPackage.drvPath);
+        tildePathFails = !(hmTry hmTildePath.activationPackage.drvPath);
+        emptyVarGroupFails = !(hmTry hmEmptyVarGroup.activationPackage.drvPath);
         emptyFails = !(hmTry hmEmpty.activationPackage.drvPath);
         badCommandFails = !(hmTry hmBadCommand.activationPackage.drvPath);
         badVarsFails = !(hmTry hmBadVars.activationPackage.drvPath);
@@ -774,6 +816,10 @@
               && r.builtinsAreDeclared && r.zeroHasNoLaunchers
               && r.disabledOnlyHasNoLaunchers
               && r.storeFails
+              && r.storeInfixFails
+              && r.secretExtraEnvFails
+              && r.tildePathFails
+              && r.emptyVarGroupFails
               && r.emptyFails
               && r.badCommandFails
               && r.badVarsFails
