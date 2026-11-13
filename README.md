@@ -71,7 +71,7 @@ Override with `SHMULCODE_ENV_FILE=/path/to/env`.
 |------|---------|
 | `78` | wrapper-layer configuration failure (missing/unreadable env file, bad syntax, missing variables) |
 | `64` | `shmulcode` usage error (unknown command/instance) |
-| `73` | `shmulcode init` refused to overwrite an existing file |
+| `73` | `shmulcode init` could not create the file (already exists, or the path/mode could not be set) |
 | anything else | Claude Code's own exit code, passed through unchanged |
 
 Diagnostics never print values — only variable *names* and which ones are set.
